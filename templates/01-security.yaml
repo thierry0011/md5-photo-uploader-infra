@@ -52,6 +52,19 @@ Resources:
               - kms:GenerateDataKey*
               - kms:Describe*
             Resource: "*"
+          - Sid: AllowCloudFrontDecryptForOAC
+            # CloudFront (fetching S3 objects via OAC) must be able to decrypt
+            # SSE-KMS objects. Scoped by source account rather than the
+            # distribution ARN so this key (created before the CloudFront
+            # distribution, in a different stack) has no circular dependency.
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: kms:Decrypt
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-cmk

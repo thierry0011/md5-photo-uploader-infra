@@ -84,12 +84,6 @@ Resources:
               KMSMasterKeyID: !ImportValue
                 Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
             BucketKeyEnabled: true
-      CorsConfiguration:
-        CorsRules:
-          - AllowedMethods: [GET, HEAD]
-            AllowedOrigins: ["*"]
-            AllowedHeaders: ["*"]
-            MaxAge: 3000
       LifecycleConfiguration:
         Rules:
           - Id: AbortIncompleteMultipartUploads

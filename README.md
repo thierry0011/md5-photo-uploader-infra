@@ -120,6 +120,20 @@ aws cloudformation list-exports \
   --query "Exports[?Name=='photo-gallery-dev-AlbDnsName'].Value" --output text
 ```
 
+## A known caveat of ECS + CodeDeploy blue/green under CloudFormation
+
+Once CodeDeploy performs its first blue/green swap, it registers new task
+definition revisions and re-points the ECS service outside CloudFormation's
+knowledge — this is normal and how every ECS+CodeDeploy blue/green reference
+architecture works. The consequence: after go-live, avoid pushing changes to
+`07-ecs-alb.yaml` or its deployment file that touch `AppTaskDefinition` /
+`AppService` (e.g. `ContainerImage`, `TaskCpu`). Git sync would re-run
+`UpdateStack`, and CloudFormation would try to reconcile the service back to
+the stack's last-known state (the placeholder image), fighting CodeDeploy.
+Safe, ongoing changes belong in the app repo (`ecs/taskdef.json` +
+`ecs/appspec.yaml`) or in `08-autoscaling.yaml` / `09-cicd-pipeline.yaml`,
+which don't touch the service's running task definition directly.
+
 ## Cost / security choices worth knowing about
 
 - **No NAT Gateway by default** (`EnableNatGateway: "false"`). ECS tasks
