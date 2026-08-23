@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Gallery - ECR repository for the Django application image. Scans on
+  push, keeps the last 10 tagged images, expires untagged images after 1 day.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-gallery
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  GitHubActionsRoleArn:
+    Type: String
+    Description: >
+      ARN of the GitHub Actions OIDC role (from 08-github-oidc.yaml) that is
+      allowed to push images. Leave blank on first deploy, then update once
+      08-github-oidc.yaml has been created.
+    Default: ""
+
+Conditions:
+  HasGitHubActionsRole: !Not [!Equals [!Ref GitHubActionsRoleArn, ""]]
+
+Resources:
+  AppRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${ProjectName}-${Environment}-app
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      EncryptionConfiguration:
+        EncryptionType: KMS
+        KmsKey: !ImportValue
+          Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 1 day",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 1
+                },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep only the last 10 tagged images",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["v", "main", "sha-"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      RepositoryPolicyText:
+        Fn::If:
+          - HasGitHubActionsRole
+          - Version: "2012-10-17"
+            Statement:
+              - Sid: AllowGitHubActionsPush
+                Effect: Allow
+                Principal:
+                  AWS: !Ref GitHubActionsRoleArn
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-app-repo
+
+Outputs:
+  RepositoryName:
+    Value: !Ref AppRepository
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-EcrRepositoryName
+
+  RepositoryArn:
+    Value: !GetAtt AppRepository.Arn
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-EcrRepositoryArn
+
+  RepositoryUri:
+    Value: !GetAtt AppRepository.RepositoryUri
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-EcrRepositoryUri

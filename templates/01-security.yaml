@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Gallery - Security groups (least privilege) and the shared KMS CMK
+  used to encrypt S3, RDS, Secrets Manager and CloudWatch Logs at rest.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-gallery
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  ContainerPort:
+    Type: Number
+    Default: 8000
+    Description: Port the Django/Gunicorn container listens on.
+
+  TestListenerPort:
+    Type: Number
+    Default: 8080
+    Description: ALB "test" listener port used by CodeDeploy blue/green validation.
+
+Resources:
+  # ---------------- KMS ----------------
+  AppKmsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub CMK for ${ProjectName}-${Environment} (S3, RDS, Secrets Manager, Logs)
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: RootAccountFullAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowCloudWatchLogsUse
+            Effect: Allow
+            Principal:
+              Service: !Sub logs.${AWS::Region}.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-cmk
+
+  AppKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${ProjectName}-${Environment}
+      TargetKeyId: !Ref AppKmsKey
+
+  # ---------------- Security groups ----------------
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public ALB - allows inbound HTTP/HTTPS from the internet
+      VpcId: !ImportValue
+        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from internet
+        - IpProtocol: tcp
+          FromPort: !Ref TestListenerPort
+          ToPort: !Ref TestListenerPort
+          CidrIp: 0.0.0.0/0
+          Description: CodeDeploy test listener (blue/green validation)
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-alb-sg
+
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks - allows inbound only from the ALB on the container port
+      VpcId: !ImportValue
+        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-ecs-sg
+
+  EcsIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EcsSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ContainerPort
+      ToPort: !Ref ContainerPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: Container port from ALB
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS PostgreSQL - allows inbound only from ECS tasks
+      VpcId: !ImportValue
+        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EcsSecurityGroup
+          Description: PostgreSQL from ECS tasks
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-rds-sg
+
+  VpcEndpointsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Interface VPC endpoints - allows HTTPS from inside the VPC only
+      VpcId: !ImportValue
+        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !ImportValue
+            Fn::Sub: ${ProjectName}-${Environment}-VpcCidr
+          Description: HTTPS from within the VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-vpce-sg
+
+Outputs:
+  AppKmsKeyArn:
+    Value: !GetAtt AppKmsKey.Arn
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-AppKmsKeyArn
+
+  AppKmsKeyId:
+    Value: !Ref AppKmsKey
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-AppKmsKeyId
+
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-AlbSecurityGroupId
+
+  EcsSecurityGroupId:
+    Value: !Ref EcsSecurityGroup
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-EcsSecurityGroupId
+
+  RdsSecurityGroupId:
+    Value: !Ref RdsSecurityGroup
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-RdsSecurityGroupId
+
+  VpcEndpointsSecurityGroupId:
+    Value: !Ref VpcEndpointsSecurityGroup
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-VpcEndpointsSecurityGroupId

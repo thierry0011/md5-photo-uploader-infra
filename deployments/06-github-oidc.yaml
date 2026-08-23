@@ -1,0 +1,14 @@
+template-file-path: templates/06-github-oidc.yaml
+parameters:
+  ProjectName: photo-gallery
+  Environment: dev
+  GitHubOrg: "<your-github-org>"
+  GitHubAppRepo: "photo-uploader-app"
+  GitHubDeployBranch: "main"
+  # An AWS account can only have one token.actions.githubusercontent.com
+  # provider. Set to "false" if one already exists.
+  CreateOidcProvider: "true"
+tags:
+  Project: photo-gallery
+  Environment: dev
+  ManagedBy: CloudFormation-GitSync

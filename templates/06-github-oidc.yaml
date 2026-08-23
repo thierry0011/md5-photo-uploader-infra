@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Gallery - GitHub Actions OIDC federation. Creates the GitHub OIDC
+  identity provider (or reuses one that already exists in the account) and an
+  IAM role the application repo's workflow assumes to push images to ECR.
+  No long-lived AWS credentials are used anywhere in CI/CD.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-gallery
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  GitHubOrg:
+    Type: String
+    Description: GitHub org or username that owns the application repo, e.g. "my-org".
+
+  GitHubAppRepo:
+    Type: String
+    Description: Name of the application repository, e.g. "photo-uploader-app".
+
+  GitHubDeployBranch:
+    Type: String
+    Default: main
+    Description: Branch allowed to assume this role.
+
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Set to "false" if a token.actions.githubusercontent.com OIDC provider
+      already exists in this AWS account (an account can only have one).
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  GitHubActionsEcrPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${Environment}-github-actions-ecr-push
+      Description: Assumed by GitHub Actions via OIDC to build and push the app image to ECR.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubDeployBranch}
+      MaxSessionDuration: 3600
+      Policies:
+        - PolicyName: EcrPushAndAuth
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPushToAppRepo
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !ImportValue
+                  Fn::Sub: ${ProjectName}-${Environment}-EcrRepositoryArn
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-github-actions-role
+
+Outputs:
+  GitHubActionsRoleArn:
+    Value: !GetAtt GitHubActionsEcrPushRole.Arn
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-GitHubActionsRoleArn
+    Description: >
+      Put this in the app repo's GitHub Actions workflow as the role-to-assume.
+      Then re-run the 05-ecr deployment file with this ARN as GitHubActionsRoleArn
+      so the ECR repository policy grants it push access.

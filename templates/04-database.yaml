@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Gallery - RDS PostgreSQL (db.t3 family) in private subnets, credentials
+  in Secrets Manager, encrypted with the shared CMK.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-gallery
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium]
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+
+  DBEngineVersion:
+    Type: String
+    Default: "16.4"
+
+  DBName:
+    Type: String
+    Default: photogallery
+
+  DBMultiAZ:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Multi-AZ RDS failover roughly doubles cost; off by default for this lab.
+
+  DBDeletionProtection:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  DBBackupRetentionDays:
+    Type: Number
+    Default: 7
+
+Conditions:
+  IsMultiAZ: !Equals [!Ref DBMultiAZ, "true"]
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub Private subnets for ${ProjectName}-${Environment} RDS
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: ${ProjectName}-${Environment}-PrivateSubnet1Id
+        - !ImportValue
+          Fn::Sub: ${ProjectName}-${Environment}-PrivateSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-db-subnet-group
+
+  DBCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${ProjectName}-${Environment}-db-credentials
+      Description: RDS PostgreSQL master credentials for the photo gallery app
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "photogalleryadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: "\"@/\\ '"
+      KmsKeyId: !ImportValue
+        Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-db-credentials
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${ProjectName}-${Environment}-db
+      Engine: postgres
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      KmsKeyId: !ImportValue
+        Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+      DBName: !Ref DBName
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DBCredentialsSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DBCredentialsSecret}:SecretString:password}}"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !ImportValue
+          Fn::Sub: ${ProjectName}-${Environment}-RdsSecurityGroupId
+      MultiAZ: !If [IsMultiAZ, true, false]
+      PubliclyAccessible: false
+      BackupRetentionPeriod: !Ref DBBackupRetentionDays
+      DeletionProtection: !Ref DBDeletionProtection
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      EnablePerformanceInsights: true
+      PerformanceInsightsKMSKeyId: !ImportValue
+        Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-db
+
+  DBSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBCredentialsSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
+
+Outputs:
+  DBInstanceEndpointAddress:
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-DBEndpointAddress
+
+  DBInstanceEndpointPort:
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-DBEndpointPort
+
+  DBName:
+    Value: !Ref DBName
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-DBName
+
+  DBCredentialsSecretArn:
+    Value: !Ref DBCredentialsSecret
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-DBCredentialsSecretArn
