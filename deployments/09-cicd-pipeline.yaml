@@ -2,7 +2,7 @@ template-file-path: templates/09-cicd-pipeline.yaml
 parameters:
   ProjectName: photo-gallery
   Environment: dev
-  GitHubOrg: "<your-github-org>"
+  GitHubOrg: "thierry0011"
   GitHubAppRepo: "photo-uploader-app"
   GitHubDeployBranch: "main"
   DeploymentTimeoutMinutes: "15"
