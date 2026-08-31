@@ -379,3 +379,5 @@ Outputs:
 
   CodeDeployDeploymentGroupName:
     Value: !Ref CodeDeployDeploymentGroup
+
+    #version 1.1
