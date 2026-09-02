@@ -77,7 +77,9 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubDeployBranch}
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubDeployBranch}
+                  - !Sub repo:${GitHubOrg}@*/${GitHubAppRepo}@*:ref:refs/heads/${GitHubDeployBranch}
       MaxSessionDuration: 3600
       Policies:
         - PolicyName: EcrPushAndAuth
@@ -98,9 +100,6 @@ Resources:
                   - ecr:CompleteLayerUpload
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
-                # Deterministic ARN (repo name matches 05-ecr.yaml's
-                # AppRepository RepositoryName) - see Description above for
-                # why this isn't imported from the ecr stack instead.
                 Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-${Environment}-app
       Tags:
         - Key: Name
