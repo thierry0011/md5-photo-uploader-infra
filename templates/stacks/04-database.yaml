@@ -45,6 +45,26 @@ Parameters:
     Type: Number
     Default: 7
 
+  PrivateSubnet1Id:
+    Type: String
+    Description: Private subnet 1 id from the network stack.
+
+  PrivateSubnet2Id:
+    Type: String
+    Description: Private subnet 2 id from the network stack.
+
+  AppKmsKeyId:
+    Type: String
+    Description: Shared CMK key id from the security stack.
+
+  AppKmsKeyArn:
+    Type: String
+    Description: Shared CMK ARN from the security stack.
+
+  RdsSecurityGroupId:
+    Type: String
+    Description: RDS security group id from the security stack.
+
 Conditions:
   IsMultiAZ: !Equals [!Ref DBMultiAZ, "true"]
 
@@ -54,10 +74,8 @@ Resources:
     Properties:
       DBSubnetGroupDescription: !Sub Private subnets for ${ProjectName}-${Environment} RDS
       SubnetIds:
-        - !ImportValue
-          Fn::Sub: ${ProjectName}-${Environment}-PrivateSubnet1Id
-        - !ImportValue
-          Fn::Sub: ${ProjectName}-${Environment}-PrivateSubnet2Id
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-db-subnet-group
@@ -74,8 +92,7 @@ Resources:
         GenerateStringKey: password
         PasswordLength: 32
         ExcludeCharacters: "\"@/\\ '"
-      KmsKeyId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyId
+      KmsKeyId: !Ref AppKmsKeyId
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-db-credentials
@@ -92,15 +109,13 @@ Resources:
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3
       StorageEncrypted: true
-      KmsKeyId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+      KmsKeyId: !Ref AppKmsKeyArn
       DBName: !Ref DBName
       MasterUsername: !Sub "{{resolve:secretsmanager:${DBCredentialsSecret}:SecretString:username}}"
       MasterUserPassword: !Sub "{{resolve:secretsmanager:${DBCredentialsSecret}:SecretString:password}}"
       DBSubnetGroupName: !Ref DBSubnetGroup
       VPCSecurityGroups:
-        - !ImportValue
-          Fn::Sub: ${ProjectName}-${Environment}-RdsSecurityGroupId
+        - !Ref RdsSecurityGroupId
       MultiAZ: !If [IsMultiAZ, true, false]
       PubliclyAccessible: false
       BackupRetentionPeriod: !Ref DBBackupRetentionDays
@@ -108,8 +123,7 @@ Resources:
       AutoMinorVersionUpgrade: true
       CopyTagsToSnapshot: true
       EnablePerformanceInsights: true
-      PerformanceInsightsKMSKeyId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+      PerformanceInsightsKMSKeyId: !Ref AppKmsKeyArn
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-db
@@ -124,20 +138,12 @@ Resources:
 Outputs:
   DBInstanceEndpointAddress:
     Value: !GetAtt DBInstance.Endpoint.Address
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-DBEndpointAddress
 
   DBInstanceEndpointPort:
     Value: !GetAtt DBInstance.Endpoint.Port
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-DBEndpointPort
 
   DBName:
     Value: !Ref DBName
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-DBName
 
   DBCredentialsSecretArn:
     Value: !Ref DBCredentialsSecret
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-DBCredentialsSecretArn

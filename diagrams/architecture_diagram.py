@@ -12,14 +12,16 @@ Usage:
 """
 
 from diagrams import Cluster, Diagram, Edge
-from diagrams.aws.compute import ECS, ElasticContainerServiceContainer
-from diagrams.aws.database import RDS, ElasticacheForRedis
-from diagrams.aws.devtools import Codepipeline, Codedeploy, Codebuild
+from diagrams.aws.compute import ECR, ElasticContainerServiceContainer
+from diagrams.aws.database import RDS
+from diagrams.aws.devtools import Codepipeline, Codedeploy
+from diagrams.aws.general import Users
 from diagrams.aws.integration import Eventbridge
 from diagrams.aws.management import Cloudwatch
 from diagrams.aws.network import (
     ALB,
     CloudFront,
+    Endpoint,
     InternetGateway,
     PrivateSubnet,
     PublicSubnet,
@@ -43,7 +45,7 @@ with Diagram(
     direction="TB",
     graph_attr=graph_attr,
 ):
-    users = Github("End users\n(browser)")
+    users = Users("End users\n(browser)")
 
     with Cluster("GitHub"):
         app_repo = Github("photo-uploader-app\n(Django, Dockerfile,\ntaskdef/appspec)")
@@ -63,16 +65,16 @@ with Diagram(
             with Cluster("ECS Fargate service (1-4 tasks)"):
                 svc_blue = ElasticContainerServiceContainer("Blue task set")
                 svc_green = ElasticContainerServiceContainer("Green task set")
-            db = RDS("RDS PostgreSQL\n(db.t3, Multi-AZ VPC)")
+            db = RDS("RDS PostgreSQL\n(db.t3, single-AZ -\nno standby replica)")
 
         with Cluster("VPC Endpoints (no NAT)"):
-            vpce = Cloudwatch("ECR / S3 / Logs /\nSecrets Manager")
+            vpce = Endpoint("ECR / S3 / Logs /\nSecrets Manager")
 
     images_bucket = S3("S3: images\n(private, KMS)")
     kms = KMS("KMS CMK")
 
     with Cluster("CI/CD"):
-        ecr = S3("ECR: app image")
+        ecr = ECR("ECR: app image")
         eventbridge = Eventbridge("EventBridge rule\n(ECR push)")
         pipeline = Codepipeline("CodePipeline")
         codedeploy = Codedeploy("CodeDeploy\n(blue/green)")

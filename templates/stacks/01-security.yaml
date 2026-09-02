@@ -23,6 +23,14 @@ Parameters:
     Default: 8080
     Description: ALB "test" listener port used by CodeDeploy blue/green validation.
 
+  VpcId:
+    Type: String
+    Description: VPC id from the network stack.
+
+  VpcCidr:
+    Type: String
+    Description: VPC CIDR block from the network stack.
+
 Resources:
   # ---------------- KMS ----------------
   AppKmsKey:
@@ -56,7 +64,8 @@ Resources:
             # CloudFront (fetching S3 objects via OAC) must be able to decrypt
             # SSE-KMS objects. Scoped by source account rather than the
             # distribution ARN so this key (created before the CloudFront
-            # distribution, in a different stack) has no circular dependency.
+            # distribution, in a different nested stack) has no circular
+            # dependency.
             Effect: Allow
             Principal:
               Service: cloudfront.amazonaws.com
@@ -80,8 +89,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Public ALB - allows inbound HTTP/HTTPS from the internet
-      VpcId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
@@ -101,8 +109,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ECS tasks - allows inbound only from the ALB on the container port
-      VpcId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      VpcId: !Ref VpcId
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-ecs-sg
@@ -121,8 +128,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: RDS PostgreSQL - allows inbound only from ECS tasks
-      VpcId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 5432
@@ -137,14 +143,12 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Interface VPC endpoints - allows HTTPS from inside the VPC only
-      VpcId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-VpcCidr
+          CidrIp: !Ref VpcCidr
           Description: HTTPS from within the VPC
       Tags:
         - Key: Name
@@ -153,30 +157,18 @@ Resources:
 Outputs:
   AppKmsKeyArn:
     Value: !GetAtt AppKmsKey.Arn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-AppKmsKeyArn
 
   AppKmsKeyId:
     Value: !Ref AppKmsKey
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-AppKmsKeyId
 
   AlbSecurityGroupId:
     Value: !Ref AlbSecurityGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-AlbSecurityGroupId
 
   EcsSecurityGroupId:
     Value: !Ref EcsSecurityGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-EcsSecurityGroupId
 
   RdsSecurityGroupId:
     Value: !Ref RdsSecurityGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-RdsSecurityGroupId
 
   VpcEndpointsSecurityGroupId:
     Value: !Ref VpcEndpointsSecurityGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-VpcEndpointsSecurityGroupId

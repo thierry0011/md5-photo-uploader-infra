@@ -1,8 +1,0 @@
-template-file-path: templates/02-vpc-endpoints.yaml
-parameters:
-  ProjectName: photo-gallery
-  Environment: dev
-tags:
-  Project: photo-gallery
-  Environment: dev
-  ManagedBy: CloudFormation-GitSync

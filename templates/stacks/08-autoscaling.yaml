@@ -25,6 +25,14 @@ Parameters:
     Type: Number
     Default: 60
 
+  EcsClusterName:
+    Type: String
+    Description: ECS cluster name from the ecs-alb stack.
+
+  EcsServiceName:
+    Type: String
+    Description: ECS service name from the ecs-alb stack.
+
 Resources:
   ScalingRole:
     Type: AWS::IAM::Role
@@ -44,12 +52,7 @@ Resources:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
     Properties:
       ServiceNamespace: ecs
-      ResourceId: !Sub
-        - service/${ClusterName}/${ServiceName}
-        - ClusterName: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-EcsClusterName
-          ServiceName: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-EcsServiceName
+      ResourceId: !Sub service/${EcsClusterName}/${EcsServiceName}
       ScalableDimension: ecs:service:DesiredCount
       MinCapacity: !Ref MinCapacity
       MaxCapacity: !Ref MaxCapacity

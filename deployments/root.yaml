@@ -1,0 +1,37 @@
+template-file-path: templates/root.packaged.yaml
+parameters:
+  ProjectName: photo-gallery
+  Environment: dev
+  VpcCidr: "10.20.0.0/16"
+  PublicSubnet1Cidr: "10.20.0.0/24"
+  PublicSubnet2Cidr: "10.20.1.0/24"
+  PrivateSubnet1Cidr: "10.20.10.0/24"
+  PrivateSubnet2Cidr: "10.20.11.0/24"
+  EnableNatGateway: "false"
+  ContainerPort: "8000"
+  TestListenerPort: "8080"
+  DBInstanceClass: db.t3.micro
+  DBAllocatedStorage: "20"
+  DBEngineVersion: "16.4"
+  DBName: photogallery
+  DBMultiAZ: "false"
+  DBDeletionProtection: "false"
+  DBBackupRetentionDays: "7"
+  GitHubOrg: "thierry0011"
+  GitHubAppRepo: "photo-uploader-app"
+  GitHubDeployBranch: "main"
+  # bootstrap.yaml already created the account's OIDC provider - this stack
+  # must not try to create a second one.
+  CreateOidcProvider: "false"
+  TaskCpu: "512"
+  TaskMemory: "1024"
+  ContainerImage: public.ecr.aws/docker/library/httpd:2.4
+  DjangoAllowedHosts: "*"
+  MinCapacity: "1"
+  MaxCapacity: "4"
+  CpuTargetValue: "60"
+  DeploymentTimeoutMinutes: "15"
+tags:
+  Project: photo-gallery
+  Environment: dev
+  ManagedBy: CloudFormation-GitSync

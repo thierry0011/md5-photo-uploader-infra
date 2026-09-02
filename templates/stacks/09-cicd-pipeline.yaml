@@ -33,6 +33,62 @@ Parameters:
     Default: 15
     Description: Minutes CodeDeploy waits for the old (blue) task set to be terminated after traffic shifts.
 
+  AppKmsKeyArn:
+    Type: String
+    Description: Shared CMK ARN from the security stack.
+
+  EcrRepositoryName:
+    Type: String
+    Description: ECR repository name from the ecr stack.
+
+  EcrRepositoryArn:
+    Type: String
+    Description: ECR repository ARN from the ecr stack.
+
+  AlbFullName:
+    Type: String
+    Description: ALB full name from the ecs-alb stack.
+
+  BlueTargetGroupFullName:
+    Type: String
+    Description: Blue target group full name from the ecs-alb stack.
+
+  GreenTargetGroupFullName:
+    Type: String
+    Description: Green target group full name from the ecs-alb stack.
+
+  BlueTargetGroupName:
+    Type: String
+    Description: Blue target group name from the ecs-alb stack.
+
+  GreenTargetGroupName:
+    Type: String
+    Description: Green target group name from the ecs-alb stack.
+
+  ProdListenerArn:
+    Type: String
+    Description: Production listener ARN from the ecs-alb stack.
+
+  TestListenerArn:
+    Type: String
+    Description: Test listener ARN from the ecs-alb stack.
+
+  EcsClusterName:
+    Type: String
+    Description: ECS cluster name from the ecs-alb stack.
+
+  EcsServiceName:
+    Type: String
+    Description: ECS service name from the ecs-alb stack.
+
+  TaskExecutionRoleArn:
+    Type: String
+    Description: ECS task execution role ARN from the ecs-alb stack.
+
+  TaskRoleArn:
+    Type: String
+    Description: ECS task role ARN from the ecs-alb stack.
+
 Resources:
   # ---------------- Connection to the application repository ----------------
   # After creation, open the CodeConnections console once to complete the
@@ -58,8 +114,7 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: aws:kms
-              KMSMasterKeyID: !ImportValue
-                Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+              KMSMasterKeyID: !Ref AppKmsKeyArn
             BucketKeyEnabled: true
       VersioningConfiguration:
         Status: Enabled
@@ -100,11 +155,9 @@ Resources:
       TreatMissingData: notBreaching
       Dimensions:
         - Name: TargetGroup
-          Value: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-BlueTargetGroupFullName
+          Value: !Ref BlueTargetGroupFullName
         - Name: LoadBalancer
-          Value: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-AlbFullName
+          Value: !Ref AlbFullName
 
   GreenTargetGroupUnhealthyAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -120,11 +173,9 @@ Resources:
       TreatMissingData: notBreaching
       Dimensions:
         - Name: TargetGroup
-          Value: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-GreenTargetGroupFullName
+          Value: !Ref GreenTargetGroupFullName
         - Name: LoadBalancer
-          Value: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-AlbFullName
+          Value: !Ref AlbFullName
 
   CodeDeployApplication:
     Type: AWS::CodeDeploy::Application
@@ -159,25 +210,19 @@ Resources:
         DeploymentType: BLUE_GREEN
         DeploymentOption: WITH_TRAFFIC_CONTROL
       ECSServices:
-        - ClusterName: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-EcsClusterName
-          ServiceName: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-EcsServiceName
+        - ClusterName: !Ref EcsClusterName
+          ServiceName: !Ref EcsServiceName
       LoadBalancerInfo:
         TargetGroupPairInfoList:
           - ProdTrafficRoute:
               ListenerArns:
-                - !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-ProdListenerArn
+                - !Ref ProdListenerArn
             TestTrafficRoute:
               ListenerArns:
-                - !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-TestListenerArn
+                - !Ref TestListenerArn
             TargetGroups:
-              - Name: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-BlueTargetGroupName
-              - Name: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-GreenTargetGroupName
+              - Name: !Ref BlueTargetGroupName
+              - Name: !Ref GreenTargetGroupName
 
   # ---------------- CodePipeline ----------------
   CodePipelineServiceRole:
@@ -211,8 +256,7 @@ Resources:
                 Action:
                   - kms:Decrypt
                   - kms:GenerateDataKey
-                Resource: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+                Resource: !Ref AppKmsKeyArn
               - Sid: UseAppRepoConnection
                 Effect: Allow
                 Action: codestar-connections:UseConnection
@@ -223,8 +267,7 @@ Resources:
                   - ecr:DescribeImages
                   - ecr:GetDownloadUrlForLayer
                   - ecr:BatchGetImage
-                Resource: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-EcrRepositoryArn
+                Resource: !Ref EcrRepositoryArn
               - Sid: EcrAuth
                 Effect: Allow
                 Action: ecr:GetAuthorizationToken
@@ -249,10 +292,8 @@ Resources:
                 Effect: Allow
                 Action: iam:PassRole
                 Resource:
-                  - !ImportValue
-                    Fn::Sub: ${ProjectName}-${Environment}-TaskExecutionRoleArn
-                  - !ImportValue
-                    Fn::Sub: ${ProjectName}-${Environment}-TaskRoleArn
+                  - !Ref TaskExecutionRoleArn
+                  - !Ref TaskRoleArn
                 Condition:
                   StringEquals:
                     iam:PassedToService: ecs-tasks.amazonaws.com
@@ -267,8 +308,7 @@ Resources:
         Location: !Ref PipelineArtifactBucket
         EncryptionKey:
           Type: KMS
-          Id: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+          Id: !Ref AppKmsKeyArn
       Stages:
         - Name: Source
           Actions:
@@ -293,8 +333,7 @@ Resources:
                 Provider: ECR
                 Version: "1"
               Configuration:
-                RepositoryName: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-EcrRepositoryName
+                RepositoryName: !Ref EcrRepositoryName
                 ImageTag: latest
               OutputArtifacts:
                 - Name: ImageSourceOutput
@@ -354,8 +393,7 @@ Resources:
           action-type: [PUSH]
           result: [SUCCESS]
           repository-name:
-            - !ImportValue
-              Fn::Sub: ${ProjectName}-${Environment}-EcrRepositoryName
+            - !Ref EcrRepositoryName
           image-tag: [latest]
       State: ENABLED
       Targets:
@@ -379,5 +417,3 @@ Outputs:
 
   CodeDeployDeploymentGroupName:
     Value: !Ref CodeDeployDeploymentGroup
-
-    #version 1.1

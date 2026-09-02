@@ -15,6 +15,10 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
 
+  AppKmsKeyArn:
+    Type: String
+    Description: Shared CMK ARN from the security stack.
+
 Resources:
   # ---------------- Access logs bucket (for both S3 image bucket and CloudFront) ----------------
   AccessLogsBucket:
@@ -81,8 +85,7 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: aws:kms
-              KMSMasterKeyID: !ImportValue
-                Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+              KMSMasterKeyID: !Ref AppKmsKeyArn
             BucketKeyEnabled: true
       LifecycleConfiguration:
         Rules:
@@ -188,25 +191,15 @@ Resources:
 Outputs:
   AccessLogsBucketName:
     Value: !Ref AccessLogsBucket
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-AccessLogsBucketName
 
   ImagesBucketName:
     Value: !Ref ImagesBucket
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-ImagesBucketName
 
   ImagesBucketArn:
     Value: !GetAtt ImagesBucket.Arn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-ImagesBucketArn
 
   CloudFrontDistributionId:
     Value: !Ref CloudFrontDistribution
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-CloudFrontDistributionId
 
   CloudFrontDomainName:
     Value: !GetAtt CloudFrontDistribution.DomainName
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-CloudFrontDomainName

@@ -7,7 +7,7 @@ Parameters:
   ProjectName:
     Type: String
     Default: photo-gallery
-    Description: Prefix used for resource names, tags and export names.
+    Description: Prefix used for resource names and tags.
 
   Environment:
     Type: String
@@ -249,30 +249,18 @@ Resources:
 Outputs:
   VpcId:
     Value: !Ref VPC
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-VpcId
 
   VpcCidr:
     Value: !Ref VpcCidr
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-VpcCidr
 
   PublicSubnet1Id:
     Value: !Ref PublicSubnet1
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-PublicSubnet1Id
 
   PublicSubnet2Id:
     Value: !Ref PublicSubnet2
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-PublicSubnet2Id
 
   PrivateSubnet1Id:
     Value: !Ref PrivateSubnet1
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnet1Id
 
   PrivateSubnet2Id:
     Value: !Ref PrivateSubnet2
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnet2Id

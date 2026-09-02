@@ -2,6 +2,11 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - ECR repository for the Django application image. Scans on
   push, keeps the last 10 tagged images, expires untagged images after 1 day.
+  The repository policy trusts the GitHub Actions role created by the
+  github-oidc stack; this stack depends on that one's GitHubActionsRoleArn
+  output. Nested-stack ordering guarantees that role exists by the time this
+  template needs it - no manual redeploy dance required (unlike the old
+  flat-stack Export/ImportValue design this replaced).
 
 Parameters:
   ProjectName:
@@ -13,16 +18,13 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
 
+  AppKmsKeyArn:
+    Type: String
+    Description: Shared CMK ARN from the security stack.
+
   GitHubActionsRoleArn:
     Type: String
-    Description: >
-      ARN of the GitHub Actions OIDC role (from 08-github-oidc.yaml) that is
-      allowed to push images. Leave blank on first deploy, then update once
-      08-github-oidc.yaml has been created.
-    Default: ""
-
-Conditions:
-  HasGitHubActionsRole: !Not [!Equals [!Ref GitHubActionsRoleArn, ""]]
+    Description: ARN of the GitHub Actions OIDC role, from the github-oidc stack.
 
 Resources:
   AppRepository:
@@ -34,8 +36,7 @@ Resources:
       ImageTagMutability: MUTABLE
       EncryptionConfiguration:
         EncryptionType: KMS
-        KmsKey: !ImportValue
-          Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+        KmsKey: !Ref AppKmsKeyArn
       LifecyclePolicy:
         LifecyclePolicyText: |
           {
@@ -65,23 +66,20 @@ Resources:
             ]
           }
       RepositoryPolicyText:
-        Fn::If:
-          - HasGitHubActionsRole
-          - Version: "2012-10-17"
-            Statement:
-              - Sid: AllowGitHubActionsPush
-                Effect: Allow
-                Principal:
-                  AWS: !Ref GitHubActionsRoleArn
-                Action:
-                  - ecr:BatchCheckLayerAvailability
-                  - ecr:PutImage
-                  - ecr:InitiateLayerUpload
-                  - ecr:UploadLayerPart
-                  - ecr:CompleteLayerUpload
-                  - ecr:BatchGetImage
-                  - ecr:GetDownloadUrlForLayer
-          - !Ref AWS::NoValue
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowGitHubActionsPush
+            Effect: Allow
+            Principal:
+              AWS: !Ref GitHubActionsRoleArn
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:PutImage
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-app-repo
@@ -89,15 +87,9 @@ Resources:
 Outputs:
   RepositoryName:
     Value: !Ref AppRepository
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-EcrRepositoryName
 
   RepositoryArn:
     Value: !GetAtt AppRepository.Arn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-EcrRepositoryArn
 
   RepositoryUri:
     Value: !GetAtt AppRepository.RepositoryUri
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-EcrRepositoryUri

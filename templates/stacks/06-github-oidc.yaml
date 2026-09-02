@@ -2,8 +2,17 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - GitHub Actions OIDC federation. Creates the GitHub OIDC
   identity provider (or reuses one that already exists in the account) and an
-  IAM role the application repo's workflow assumes to push images to ECR.
-  No long-lived AWS credentials are used anywhere in CI/CD.
+  IAM role the application repo's workflow assumes to push images to ECR. No
+  long-lived AWS credentials are used anywhere in CI/CD.
+
+  Deliberately has no dependency on the ecr stack: ECR has no standalone
+  "repository policy" resource type in CloudFormation (only an inline
+  RepositoryPolicyText property on AWS::ECR::Repository itself), so the repo
+  name is deterministic here and used to build this role's own IAM policy
+  Resource ARN directly, rather than importing it. That keeps the
+  ecr <-> github-oidc dependency one-directional: ecr depends on this stack's
+  GitHubActionsRoleArn output (to populate its RepositoryPolicyText), and
+  this stack depends on nothing from ecr.
 
 Parameters:
   ProjectName:
@@ -34,7 +43,8 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: >
       Set to "false" if a token.actions.githubusercontent.com OIDC provider
-      already exists in this AWS account (an account can only have one).
+      already exists in this AWS account (an account can only have one) -
+      e.g. because bootstrap.yaml already created it.
 
 Conditions:
   ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
@@ -88,8 +98,10 @@ Resources:
                   - ecr:CompleteLayerUpload
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
-                Resource: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-EcrRepositoryArn
+                # Deterministic ARN (repo name matches 05-ecr.yaml's
+                # AppRepository RepositoryName) - see Description above for
+                # why this isn't imported from the ecr stack instead.
+                Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-${Environment}-app
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-github-actions-role
@@ -97,9 +109,4 @@ Resources:
 Outputs:
   GitHubActionsRoleArn:
     Value: !GetAtt GitHubActionsEcrPushRole.Arn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-GitHubActionsRoleArn
-    Description: >
-      Put this in the app repo's GitHub Actions workflow as the role-to-assume.
-      Then re-run the 05-ecr deployment file with this ARN as GitHubActionsRoleArn
-      so the ECR repository policy grants it push access.
+    Description: Put this in the app repo's GitHub Actions workflow as the role-to-assume.

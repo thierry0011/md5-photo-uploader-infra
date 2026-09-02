@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Gallery - One-time bootstrap prerequisite for the nested-stack
+  deployment in root.yaml. NOT part of the nested-stack tree, deployed
+  standalone, first, and never superseded by root.yaml. Creates the S3
+  bucket that CI packages nested-stack templates into, and the GitHub
+  Actions OIDC role (for the infra repo, not the app repo) allowed to
+  upload to it. Nothing here depends on the app KMS key, RDS, or any other
+  resource created later - by design, since none of that exists yet when
+  this stack is deployed.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-gallery
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  GitHubOrg:
+    Type: String
+    Description: GitHub org or username that owns the infra repo, e.g. "my-org".
+
+  GitHubInfraRepo:
+    Type: String
+    Default: photo-uploader-infra
+    Description: Name of this infrastructure repository.
+
+  GitHubDeployBranch:
+    Type: String
+    Default: main
+    Description: Branch allowed to assume the packaging role.
+
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Set to "false" if a token.actions.githubusercontent.com OIDC provider
+      already exists in this AWS account (an account can only have one) -
+      e.g. because this is deployed after 06-github-oidc.yaml (via root.yaml)
+      already created it. Whichever of the two deploys second must set this
+      to "false".
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-cfn-templates
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  InfraGitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${Environment}-github-actions-cfn-package
+      Description: >
+        Assumed by the infra repo's GitHub Actions workflow via OIDC to
+        package nested-stack templates and upload them to TemplatesBucket.
+        No deploy permissions - Git sync handles the actual stack update
+        once the packaged template is committed back to the repo.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubInfraRepo}:ref:refs/heads/${GitHubDeployBranch}
+      MaxSessionDuration: 3600
+      Policies:
+        - PolicyName: PackageTemplatesToS3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub ${TemplatesBucket.Arn}/*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt TemplatesBucket.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-github-actions-cfn-package
+
+Outputs:
+  TemplatesBucketName:
+    Value: !Ref TemplatesBucket
+    Description: Pass to `aws cloudformation package --s3-bucket`.
+
+  InfraGitHubActionsRoleArn:
+    Value: !GetAtt InfraGitHubActionsRole.Arn
+    Description: Put this in .github/workflows/package-templates.yml as the role-to-assume.

@@ -47,6 +47,74 @@ Parameters:
     Default: "*"
     Description: Comma-separated ALLOWED_HOSTS for Django; tighten to the ALB DNS name after first deploy.
 
+  VpcId:
+    Type: String
+    Description: VPC id from the network stack.
+
+  PublicSubnet1Id:
+    Type: String
+    Description: Public subnet 1 id from the network stack.
+
+  PublicSubnet2Id:
+    Type: String
+    Description: Public subnet 2 id from the network stack.
+
+  PrivateSubnet1Id:
+    Type: String
+    Description: Private subnet 1 id from the network stack.
+
+  PrivateSubnet2Id:
+    Type: String
+    Description: Private subnet 2 id from the network stack.
+
+  AlbSecurityGroupId:
+    Type: String
+    Description: ALB security group id from the security stack.
+
+  EcsSecurityGroupId:
+    Type: String
+    Description: ECS task security group id from the security stack.
+
+  AppKmsKeyId:
+    Type: String
+    Description: Shared CMK key id from the security stack.
+
+  AppKmsKeyArn:
+    Type: String
+    Description: Shared CMK ARN from the security stack.
+
+  AccessLogsBucketName:
+    Type: String
+    Description: ALB access-logs bucket name from the storage-cdn stack.
+
+  ImagesBucketName:
+    Type: String
+    Description: Images bucket name from the storage-cdn stack.
+
+  ImagesBucketArn:
+    Type: String
+    Description: Images bucket ARN from the storage-cdn stack.
+
+  CloudFrontDomainName:
+    Type: String
+    Description: CloudFront domain name from the storage-cdn stack.
+
+  DBEndpointAddress:
+    Type: String
+    Description: RDS endpoint address from the database stack.
+
+  DBEndpointPort:
+    Type: String
+    Description: RDS endpoint port from the database stack.
+
+  DBName:
+    Type: String
+    Description: Database name from the database stack.
+
+  DBCredentialsSecretArn:
+    Type: String
+    Description: DB credentials secret ARN from the database stack.
+
 Resources:
   # ---------------- ALB ----------------
   ApplicationLoadBalancer:
@@ -57,13 +125,10 @@ Resources:
       Scheme: internet-facing
       IpAddressType: ipv4
       SecurityGroups:
-        - !ImportValue
-          Fn::Sub: ${ProjectName}-${Environment}-AlbSecurityGroupId
+        - !Ref AlbSecurityGroupId
       Subnets:
-        - !ImportValue
-          Fn::Sub: ${ProjectName}-${Environment}-PublicSubnet1Id
-        - !ImportValue
-          Fn::Sub: ${ProjectName}-${Environment}-PublicSubnet2Id
+        - !Ref PublicSubnet1Id
+        - !Ref PublicSubnet2Id
       LoadBalancerAttributes:
         - Key: idle_timeout.timeout_seconds
           Value: "60"
@@ -72,8 +137,7 @@ Resources:
         - Key: access_logs.s3.enabled
           Value: "true"
         - Key: access_logs.s3.bucket
-          Value: !ImportValue
-            Fn::Sub: ${ProjectName}-${Environment}-AccessLogsBucketName
+          Value: !Ref AccessLogsBucketName
         - Key: access_logs.s3.prefix
           Value: alb
       Tags:
@@ -87,8 +151,7 @@ Resources:
       TargetType: ip
       Protocol: HTTP
       Port: !Ref ContainerPort
-      VpcId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      VpcId: !Ref VpcId
       HealthCheckEnabled: true
       HealthCheckPath: /health/
       HealthCheckIntervalSeconds: 15
@@ -111,8 +174,7 @@ Resources:
       TargetType: ip
       Protocol: HTTP
       Port: !Ref ContainerPort
-      VpcId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-VpcId
+      VpcId: !Ref VpcId
       HealthCheckEnabled: true
       HealthCheckPath: /health/
       HealthCheckIntervalSeconds: 15
@@ -160,8 +222,7 @@ Resources:
         GenerateStringKey: SECRET_KEY
         PasswordLength: 50
         ExcludePunctuation: true
-      KmsKeyId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyId
+      KmsKeyId: !Ref AppKmsKeyId
 
   # ---------------- ECS ----------------
   EcsCluster:
@@ -182,8 +243,7 @@ Resources:
     Properties:
       LogGroupName: !Sub /ecs/${ProjectName}-${Environment}
       RetentionInDays: 30
-      KmsKeyId: !ImportValue
-        Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+      KmsKeyId: !Ref AppKmsKeyArn
 
   TaskExecutionRole:
     Type: AWS::IAM::Role
@@ -206,8 +266,7 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource:
-                  - !ImportValue
-                    Fn::Sub: ${ProjectName}-${Environment}-DBCredentialsSecretArn
+                  - !Ref DBCredentialsSecretArn
                   - !Ref DjangoSecretKey
         - PolicyName: DecryptWithAppKey
           PolicyDocument:
@@ -215,8 +274,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: kms:Decrypt
-                Resource: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+                Resource: !Ref AppKmsKeyArn
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -239,20 +297,15 @@ Resources:
                   - s3:PutObject
                   - s3:GetObject
                   - s3:DeleteObject
-                Resource: !Sub
-                  - ${BucketArn}/*
-                  - BucketArn: !ImportValue
-                      Fn::Sub: ${ProjectName}-${Environment}-ImagesBucketArn
+                Resource: !Sub ${ImagesBucketArn}/*
               - Effect: Allow
                 Action: s3:ListBucket
-                Resource: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-ImagesBucketArn
+                Resource: !Ref ImagesBucketArn
               - Effect: Allow
                 Action:
                   - kms:Decrypt
                   - kms:GenerateDataKey
-                Resource: !ImportValue
-                  Fn::Sub: ${ProjectName}-${Environment}-AppKmsKeyArn
+                Resource: !Ref AppKmsKeyArn
 
   AppTaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -278,33 +331,22 @@ Resources:
             - Name: DJANGO_ALLOWED_HOSTS
               Value: !Ref DjangoAllowedHosts
             - Name: AWS_STORAGE_BUCKET_NAME
-              Value: !ImportValue
-                Fn::Sub: ${ProjectName}-${Environment}-ImagesBucketName
+              Value: !Ref ImagesBucketName
             - Name: AWS_CLOUDFRONT_DOMAIN
-              Value: !ImportValue
-                Fn::Sub: ${ProjectName}-${Environment}-CloudFrontDomainName
+              Value: !Ref CloudFrontDomainName
             - Name: AWS_REGION
               Value: !Ref AWS::Region
             - Name: POSTGRES_HOST
-              Value: !ImportValue
-                Fn::Sub: ${ProjectName}-${Environment}-DBEndpointAddress
+              Value: !Ref DBEndpointAddress
             - Name: POSTGRES_PORT
-              Value: !ImportValue
-                Fn::Sub: ${ProjectName}-${Environment}-DBEndpointPort
+              Value: !Ref DBEndpointPort
             - Name: POSTGRES_DB
-              Value: !ImportValue
-                Fn::Sub: ${ProjectName}-${Environment}-DBName
+              Value: !Ref DBName
           Secrets:
             - Name: POSTGRES_USER
-              ValueFrom: !Sub
-                - "${SecretArn}:username::"
-                - SecretArn: !ImportValue
-                    Fn::Sub: ${ProjectName}-${Environment}-DBCredentialsSecretArn
+              ValueFrom: !Sub "${DBCredentialsSecretArn}:username::"
             - Name: POSTGRES_PASSWORD
-              ValueFrom: !Sub
-                - "${SecretArn}:password::"
-                - SecretArn: !ImportValue
-                    Fn::Sub: ${ProjectName}-${Environment}-DBCredentialsSecretArn
+              ValueFrom: !Sub "${DBCredentialsSecretArn}:password::"
             - Name: DJANGO_SECRET_KEY
               ValueFrom: !Sub "${DjangoSecretKey}:SECRET_KEY::"
           LogConfiguration:
@@ -330,13 +372,10 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED
           Subnets:
-            - !ImportValue
-              Fn::Sub: ${ProjectName}-${Environment}-PrivateSubnet1Id
-            - !ImportValue
-              Fn::Sub: ${ProjectName}-${Environment}-PrivateSubnet2Id
+            - !Ref PrivateSubnet1Id
+            - !Ref PrivateSubnet2Id
           SecurityGroups:
-            - !ImportValue
-              Fn::Sub: ${ProjectName}-${Environment}-EcsSecurityGroupId
+            - !Ref EcsSecurityGroupId
       LoadBalancers:
         - ContainerName: app
           ContainerPort: !Ref ContainerPort
@@ -348,85 +387,51 @@ Resources:
 Outputs:
   AlbDnsName:
     Value: !GetAtt ApplicationLoadBalancer.DNSName
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-AlbDnsName
 
   AlbArn:
     Value: !Ref ApplicationLoadBalancer
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-AlbArn
 
   AlbFullName:
     Value: !GetAtt ApplicationLoadBalancer.LoadBalancerFullName
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-AlbFullName
 
   BlueTargetGroupFullName:
     Value: !GetAtt BlueTargetGroup.TargetGroupFullName
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-BlueTargetGroupFullName
 
   GreenTargetGroupFullName:
     Value: !GetAtt GreenTargetGroup.TargetGroupFullName
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-GreenTargetGroupFullName
 
   BlueTargetGroupArn:
     Value: !Ref BlueTargetGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-BlueTargetGroupArn
 
   GreenTargetGroupArn:
     Value: !Ref GreenTargetGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-GreenTargetGroupArn
 
   ProdListenerArn:
     Value: !Ref ProdListener
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-ProdListenerArn
 
   TestListenerArn:
     Value: !Ref TestListener
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-TestListenerArn
 
   BlueTargetGroupName:
     Value: !GetAtt BlueTargetGroup.TargetGroupName
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-BlueTargetGroupName
 
   GreenTargetGroupName:
     Value: !GetAtt GreenTargetGroup.TargetGroupName
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-GreenTargetGroupName
 
   EcsClusterName:
     Value: !Ref EcsCluster
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-EcsClusterName
 
   EcsClusterArn:
     Value: !GetAtt EcsCluster.Arn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-EcsClusterArn
 
   EcsServiceName:
     Value: !GetAtt AppService.Name
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-EcsServiceName
 
   TaskExecutionRoleArn:
     Value: !GetAtt TaskExecutionRole.Arn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-TaskExecutionRoleArn
 
   TaskRoleArn:
     Value: !GetAtt TaskRole.Arn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-TaskRoleArn
 
   AppLogGroupName:
     Value: !Ref AppLogGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-AppLogGroupName
