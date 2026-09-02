@@ -8,7 +8,7 @@ Description: >
   upload to it. Nothing here depends on the app KMS key, RDS, or any other
   resource created later - by design, since none of that exists yet when
   this stack is deployed.
-
+#v1.2
 Parameters:
   ProjectName:
     Type: String
