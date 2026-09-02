@@ -18,14 +18,13 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  # ARN output by bootstrap.yaml's InfraGitHubActionsRole.
-  AWS_ROLE_ARN: arn:aws:iam::<AWS_ACCOUNT_ID>:role/photo-gallery-dev-github-actions-cfn-package
-  # Bucket name output by bootstrap.yaml's TemplatesBucket.
-  TEMPLATES_BUCKET: photo-gallery-dev-cfn-templates-<AWS_ACCOUNT_ID>
 
 jobs:
   package:
     runs-on: ubuntu-latest
+    env:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      TEMPLATES_BUCKET: ${{ secrets.TEMPLATES_BUCKET }}
     steps:
       - uses: actions/checkout@v4
 
