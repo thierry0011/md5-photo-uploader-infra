@@ -9,9 +9,10 @@ Description: >
   crosses too many boundaries for grouping to pay for itself - see
   07-ecs-alb below, which pulls from network, security, storage-cdn and
   database all at once.
-  SOURCE OF TRUTH: edit this file (and templates/stacks/*.yaml), never
-  templates/root.packaged.yaml, which is a generated build artifact - see
-  README.md.
+  DEPLOYED BY: .github/workflows/deploy-root-stack.yml, which packages this
+  file to S3 and runs `aws cloudformation deploy` in the same job run - the
+  packaged template is never written into the repo or committed anywhere,
+  it exists only as a local file inside that job. Not Git-sync-deployed.
   PREREQUISITE: templates/bootstrap.yaml must already be deployed - it is
   not part of this nested-stack tree and is never superseded by it.
 

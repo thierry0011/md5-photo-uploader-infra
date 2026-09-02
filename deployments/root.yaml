@@ -1,4 +1,9 @@
-template-file-path: templates/root.packaged.yaml
+# Not a Git-sync deployment file - root.yaml is deployed directly by
+# .github/workflows/deploy-root-stack.yml, which reads the `parameters` and
+# `tags` blocks below to build `aws cloudformation deploy`'s
+# --parameter-overrides and --tags. Edit values here to change the deploy;
+# a push to this file (or to templates/root.yaml / templates/stacks/**)
+# triggers the workflow.
 parameters:
   ProjectName: photo-gallery
   Environment: dev
@@ -34,4 +39,4 @@ parameters:
 tags:
   Project: photo-gallery
   Environment: dev
-  ManagedBy: CloudFormation-GitSync
+  ManagedBy: GitHubActions-Deploy

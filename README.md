@@ -1,15 +1,24 @@
-# Photo Gallery — Infrastructure (CloudFormation, nested stacks + Git Sync)
+# Photo Gallery — Infrastructure (CloudFormation nested stacks)
 
 Infrastructure-as-code for a highly available, containerized photo gallery on
-ECS Fargate. This repo is deployed via **AWS CloudFormation Git sync** — no
-`aws cloudformation deploy` from a laptop, no Terraform, no CDK. A single
-**root stack** (`templates/root.yaml`) owns 10 **nested stacks** (network,
-security, vpc-endpoints, storage-cdn, database, ecr, github-oidc, ecs-alb,
-autoscaling, cicd-pipeline) as `AWS::CloudFormation::Stack` resources, wired
-together with `!GetAtt`. Pushing a change to `templates/root.yaml` or
-`templates/stacks/**` re-deploys the whole nested tree automatically (via a
-GitHub Actions packaging step, then a pull request CloudFormation opens on
-this repo for Git sync — see "How deploys actually happen" below).
+ECS Fargate. A single **root stack** (`templates/root.yaml`) owns 10 **nested
+stacks** (network, security, vpc-endpoints, storage-cdn, database, ecr,
+github-oidc, ecs-alb, autoscaling, cicd-pipeline) as
+`AWS::CloudFormation::Stack` resources, wired together with `!GetAtt`.
+
+Two different deploy mechanisms are used, deliberately:
+- **`bootstrap.yaml`** (one-time prerequisite, not part of the nested tree)
+  is deployed via **AWS CloudFormation Git sync** — small, security-sensitive,
+  rarely changes, benefits from the PR-review step Git sync gives you.
+- **`root.yaml`** (the actual application infra) is deployed by
+  `.github/workflows/deploy-root-stack.yml`: on every push touching
+  `templates/root.yaml`, `templates/stacks/**`, or `deployments/root.yaml`,
+  GitHub Actions packages the nested-stack templates to S3 and runs
+  `aws cloudformation deploy` **in the same job run** — no intermediate file
+  is ever committed anywhere. `aws cloudformation deploy` does its own
+  changeset comparison against the live stack each time, so pushing
+  unchanged templates is a no-op. Git sync isn't used here at all (see "Why
+  root.yaml isn't Git-sync-deployed" below).
 
 Application code lives in a separate repo: **photo-uploader-app**.
 
@@ -56,25 +65,20 @@ python cicd_push_flow_diagram.py                     # -> cicd_push_flow.png
 python user_upload_flow_diagram.py                   # -> user_upload_flow.png
 ```
 
-## Source of truth vs. generated artifact
+## Source of truth
 
-- **`templates/root.yaml`** and **`templates/stacks/*.yaml`** are the
-  source of truth. Edit these.
-- **`templates/root.packaged.yaml`** is a **generated build artifact**,
-  produced by `.github/workflows/package-templates.yml` and committed back
-  to `main` automatically. It exists only because CloudFormation Git sync
-  can watch just the files that live in the repo, and a nested stack's
-  `TemplateURL` must already be a real S3 URL by the time Git sync reads it
-  (see "Why the packaging step exists" below). **Never hand-edit
-  `root.packaged.yaml`** — it carries an auto-generated header comment for
-  exactly this reason, and any manual edit is silently overwritten on the
-  next push to `main`.
+`templates/root.yaml` and `templates/stacks/*.yaml` are the only files you
+ever edit for the nested stack. The packaged template (`aws cloudformation
+package`'s output, with local `TemplateURL`s rewritten to real S3 URLs) is
+written to `/tmp` inside the deploy workflow's run and used immediately —
+it's never written into the repo, never committed, doesn't exist once the
+job finishes. There is no generated file to accidentally hand-edit.
 
 ## Stack layout
 
 | Stack | Template | Creates | Depends on (via `!GetAtt`) |
 |---|---|---|---|
-| — | `bootstrap.yaml` (standalone, **not nested**) | S3 bucket for packaged templates, GitHub Actions OIDC role for *this* repo | — |
+| — | `bootstrap.yaml` (standalone, **not nested**) | S3 bucket for packaged templates, `InfraDeployRole` (dual-trust: GitHub OIDC for this repo's deploy workflow + `cloudformation.amazonaws.com` as root's execution role) | — |
 | `NetworkStack` | `stacks/00-network.yaml` | VPC, public/private subnets (2 AZ), routing, S3 gateway endpoint | — |
 | `SecurityStack` | `stacks/01-security.yaml` | Security groups, shared KMS CMK | Network |
 | `VpcEndpointsStack` | `stacks/02-vpc-endpoints.yaml` | Interface endpoints: ECR api/dkr, CloudWatch Logs, Secrets Manager | Network, Security |
@@ -97,38 +101,53 @@ for real instead of just relocating the hack).
 ## Two-phase deploy lifecycle
 
 **Phase 1 — bootstrap (one-time, standalone, do this first).**
-`templates/bootstrap.yaml` / `deployments/bootstrap.yaml` create the S3
-bucket that packaged templates get uploaded to, and the GitHub Actions OIDC
-role (for *this* repo) allowed to upload to it. `bootstrap.yaml` is **not
-part of the nested-stack tree** — `root.yaml` never supersedes, absorbs, or
-manages it.
+`templates/bootstrap.yaml` / `deployments/bootstrap.yaml`, deployed via Git
+sync, create the S3 bucket that packaged templates get uploaded to, and
+`InfraDeployRole` — the one role used for everything else from here on.
+`bootstrap.yaml` is **not part of the nested-stack tree** — `root.yaml`
+never supersedes, absorbs, or manages it.
 
 **Phase 2 — the nested stack (ongoing).** Push a change to
-`templates/root.yaml` or `templates/stacks/**` → GitHub Actions packages
-`root.yaml` into `root.packaged.yaml` (rewriting local `TemplateURL`s to
-real S3 URLs) and commits it back to `main` → Git sync (configured on
-`deployments/root.yaml`, watching `templates/root.packaged.yaml`) deploys or
-updates the root stack and its 10 nested children.
+`templates/root.yaml`, `templates/stacks/**`, or `deployments/root.yaml` →
+`.github/workflows/deploy-root-stack.yml` assumes `InfraDeployRole` via
+OIDC, packages `root.yaml` to a local, never-committed file, and runs
+`aws cloudformation deploy` against it in that same job — creating or
+updating the root stack and its 10 nested children in one pass.
 
-## Why the packaging step exists
+## Why root.yaml isn't Git-sync-deployed
 
-CloudFormation Git sync deploys exactly the one template file named in a
-deployment file's `template-file-path` — it has no mechanism to resolve a
-nested stack's `TemplateURL` from a relative path elsewhere in the repo.
-`AWS::CloudFormation::Stack` requires `TemplateURL` to already be a real
-`https://` S3 URL. So child templates have to be packaged/uploaded to S3
-*before* Git sync ever sees the parent template — that's what the packaging
-workflow and `bootstrap.yaml`'s S3 bucket are for.
+Two independent reasons converged on this design:
+
+1. CloudFormation Git sync deploys exactly the one template file named in a
+   deployment file's `template-file-path` — it has no mechanism to resolve a
+   nested stack's `TemplateURL` from a relative path elsewhere in the repo.
+   `AWS::CloudFormation::Stack` requires `TemplateURL` to already be a real
+   `https://` S3 URL, so *something* has to package local templates to S3
+   before any deploy mechanism can see the parent template.
+2. The packaged template is a build artifact, not something we want sitting
+   in git history at all — not even on a side branch. So instead of
+   packaging once and committing the result for Git sync to pick up later,
+   the same job that packages it also deploys it immediately, and the file
+   never outlives that job.
+
+`InfraDeployRole`'s trust policy reflects this directly: one statement lets
+GitHub Actions assume it via OIDC (to call `aws cloudformation deploy`), a
+second lets `cloudformation.amazonaws.com` assume the *same* role (as the
+execution role that actually provisions every resource in the 10 nested
+stacks) — one role, two callers, no separate execution role to create by
+hand.
 
 ## One-time prerequisites (console, unavoidable manual steps)
 
-CloudFormation Git sync and CodePipeline's GitHub source both rely on **AWS
-CodeConnections**, which requires a one-time interactive OAuth handshake —
-this cannot be scripted or done via CloudFormation itself.
+Git sync (for `bootstrap.yaml`) and CodePipeline's GitHub source (in
+`CicdPipelineStack`) both rely on **AWS CodeConnections**, which requires a
+one-time interactive OAuth handshake — this cannot be scripted or done via
+CloudFormation itself.
 
 1. **Link this repo for Git sync**: CloudFormation console → *Stacks* →
    *Create stack* → *With new resources* → *Sync from Git* → *Link a Git
-   repository* → GitHub → authorize AWS's GitHub App for this repo.
+   repository* → GitHub → authorize AWS's GitHub App for this repo. (Only
+   needed for `bootstrap.yaml` — `root.yaml` doesn't use Git sync.)
 2. **Authorize the application repo's connection**: after `CicdPipelineStack`
    is created, open **Developer Tools → Connections** in the console once
    and click **Update pending connection** on the connection named in the
@@ -139,20 +158,19 @@ this cannot be scripted or done via CloudFormation itself.
 1. **Deploy `bootstrap.yaml`** via Git sync: *Create stack* → *Sync from
    Git* → deployment file `deployments/bootstrap.yaml`, template file
    `templates/bootstrap.yaml`. Fill in `GitHubOrg` with your real GitHub
-   org/username first.
-2. From `bootstrap.yaml`'s outputs, fill in the `<AWS_ACCOUNT_ID>`
-   placeholders in `.github/workflows/package-templates.yml`
-   (`AWS_ROLE_ARN` ← `InfraGitHubActionsRoleArn`, `TEMPLATES_BUCKET` ←
-   `TemplatesBucketName`) and push.
-3. Push to `main` (or run the workflow manually) so
-   `templates/root.packaged.yaml` gets created by CI.
-4. **Deploy the root stack** via Git sync: deployment file
-   `deployments/root.yaml`, template file `templates/root.packaged.yaml`
-   (not `root.yaml` — see "Source of truth vs. generated artifact"). Fill in
-   `GitHubOrg` / `GitHubAppRepo` in `deployments/root.yaml` first if they
-   differ from the defaults.
-5. Complete the CodeConnections handshake for the app repo (see above).
-6. Put the root stack's `GitHubActionsRoleArn` output into the app repo's
+   org/username first. This stack still needs its own one-time execution
+   role, created by hand (console *Create role*, since nothing exists yet to
+   create it for you) — scoped narrowly to just what `bootstrap.yaml`
+   itself creates (S3 bucket + IAM role/OIDC provider).
+2. From `bootstrap.yaml`'s outputs, add two **repository secrets** (Settings
+   → Secrets and variables → Actions): `AWS_ROLE_ARN` ← `InfraDeployRoleArn`,
+   `TEMPLATES_BUCKET` ← `TemplatesBucketName`.
+3. Push to `main` (or run `deploy-root-stack.yml` manually via
+   *Actions → Run workflow*) — this packages and deploys the root stack plus
+   all 10 nested children in one run. Fill in `GitHubOrg` / `GitHubAppRepo`
+   in `deployments/root.yaml` first if they differ from the defaults.
+4. Complete the CodeConnections handshake for the app repo (see above).
+5. Put the root stack's `GitHubActionsRoleArn` output into the app repo's
    `.github/workflows/build-and-push.yml` as `AWS_ROLE_ARN`.
 
 Unlike the old flat-stack design, there's no manual "redeploy 05 with 06's
@@ -190,10 +208,10 @@ definition revisions and re-points the ECS service outside CloudFormation's
 knowledge — this is normal and how every ECS+CodeDeploy blue/green reference
 architecture works. The consequence: after go-live, avoid pushing changes to
 `stacks/07-ecs-alb.yaml` that touch `AppTaskDefinition` / `AppService` (e.g.
-`ContainerImage`, `TaskCpu`). Git sync would re-run `UpdateStack` on the root
-(and thus this nested stack), and CloudFormation would try to reconcile the
-service back to the stack's last-known state (the placeholder image),
-fighting CodeDeploy. Safe, ongoing changes belong in the app repo
+`ContainerImage`, `TaskCpu`). The deploy workflow would re-run
+`aws cloudformation deploy` on the root stack (and thus this nested stack),
+and CloudFormation would try to reconcile the service back to the stack's
+last-known state (the placeholder image), fighting CodeDeploy. Safe, ongoing changes belong in the app repo
 (`ecs/taskdef.json` + `ecs/appspec.yaml`) or in `stacks/08-autoscaling.yaml`
 / `stacks/09-cicd-pipeline.yaml`, which don't touch the service's running
 task definition directly.
@@ -222,19 +240,29 @@ and are unaffected by root-stack rollback or deletion.
   Control scoped to this exact distribution ARN (`AWS:SourceArn` condition).
 - **All data at rest is KMS-encrypted** with a single rotated CMK (S3, RDS,
   Secrets Manager, ECR, CloudWatch Logs).
-- **CI/CD uses OIDC** (`stacks/06-github-oidc.yaml` for the app repo,
-  `bootstrap.yaml` for this repo) — no long-lived AWS credentials anywhere,
+- **CI/CD uses OIDC** (`stacks/06-github-oidc.yaml`'s role for the app
+  repo's build-and-push workflow, `bootstrap.yaml`'s `InfraDeployRole` for
+  this repo's deploy workflow) — no long-lived AWS credentials anywhere,
   each role scoped to one repo + branch via the `sub` claim.
 - Every resource is tagged `Project` / `Environment` / `ManagedBy` via
-  `deployments/root.yaml`'s `tags:` block, which nested stacks inherit from
-  the root stack automatically.
+  `deployments/root.yaml`'s `tags:` block, which `deploy-root-stack.yml`
+  passes to `aws cloudformation deploy --tags` and which nested stacks then
+  inherit from the root stack automatically.
 
 ## Tearing down
 
-Delete the root stack — CloudFormation deletes all 10 nested stacks for you,
-in reverse dependency order. `DBInstance` and `ImagesBucket` (and a few
-others — see each template's `DeletionPolicy`) are retained on deletion
-(`Snapshot` / `Retain`) so you won't lose data or an RDS snapshot by
-accident — clean those up manually if you're done with the lab. Delete
-`bootstrap.yaml`'s stack separately, last, once you're sure you won't need
-to re-package and re-deploy the nested tree again.
+There's no Git-sync PR to merge for a root-stack deletion since it isn't
+Git-sync-managed — delete it directly:
+
+```bash
+aws cloudformation delete-stack --stack-name photo-gallery-dev-root
+```
+
+CloudFormation deletes all 10 nested stacks for you, in reverse dependency
+order. `DBInstance` and `ImagesBucket` (and a few others — see each
+template's `DeletionPolicy`) are retained on deletion (`Snapshot` /
+`Retain`) so you won't lose data or an RDS snapshot by accident — clean
+those up manually if you're done with the lab. Delete `bootstrap.yaml`'s
+stack (still Git-sync-managed, so via the console or a PR that removes it)
+separately, last, once you're sure you won't need to deploy the nested tree
+again.
