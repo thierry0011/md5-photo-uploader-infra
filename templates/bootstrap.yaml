@@ -345,6 +345,12 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService:
+                      # cloudformation.amazonaws.com: this role passing
+                      # itself, required for `aws cloudformation deploy
+                      # --role-arn` (CreateChangeSet needs iam:PassRole on
+                      # whatever --role-arn names, even when it's the same
+                      # role as the caller).
+                      - cloudformation.amazonaws.com
                       - ecs-tasks.amazonaws.com
                       - application-autoscaling.amazonaws.com
                       - codepipeline.amazonaws.com
