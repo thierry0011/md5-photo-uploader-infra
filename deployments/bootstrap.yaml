@@ -5,7 +5,11 @@ parameters:
   GitHubOrg: "thierry0011"
   GitHubInfraRepo: "photo-uploader-infra"
   GitHubDeployBranch: "main"
-  CreateOidcProvider: "true"
+  # An OIDC provider for token.actions.githubusercontent.com already exists
+  # in this account (an account can only have one) - don't try to create a
+  # second one, just reuse it. See templates/bootstrap.yaml's
+  # CreateOidcProvider parameter description.
+  CreateOidcProvider: "false"
 tags:
   Project: photo-gallery
   Environment: dev
