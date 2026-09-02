@@ -20,7 +20,7 @@ Two different deploy mechanisms are used, deliberately:
   unchanged templates is a no-op. Git sync isn't used here at all (see "Why
   root.yaml isn't Git-sync-deployed" below).
 
-Application code lives in a separate repo: **photo-uploader-app**.
+Application code lives in a separate repo: **md5-photo-uploader-app**.
 
 ## Architecture
 
@@ -151,7 +151,7 @@ CloudFormation itself.
 2. **Authorize the application repo's connection**: after `CicdPipelineStack`
    is created, open **Developer Tools → Connections** in the console once
    and click **Update pending connection** on the connection named in the
-   root stack's `AppRepoConnectionArn` output (`photo-uploader-app`).
+   root stack's `AppRepoConnectionArn` output (`md5-photo-uploader-app`).
 
 ## Deploying, in order
 

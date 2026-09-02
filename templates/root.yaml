@@ -100,7 +100,7 @@ Parameters:
 
   GitHubAppRepo:
     Type: String
-    Default: photo-uploader-app
+    Default: md5-photo-uploader-app
 
   GitHubDeployBranch:
     Type: String

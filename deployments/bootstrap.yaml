@@ -3,7 +3,7 @@ parameters:
   ProjectName: photo-gallery
   Environment: dev
   GitHubOrg: "thierry0011"
-  GitHubInfraRepo: "photo-uploader-infra"
+  GitHubInfraRepo: "md5-photo-uploader-infra"
   GitHubDeployBranch: "main"
   # An OIDC provider for token.actions.githubusercontent.com already exists
   # in this account (an account can only have one) - don't try to create a

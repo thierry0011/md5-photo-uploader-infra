@@ -27,7 +27,7 @@ Parameters:
 
   GitHubInfraRepo:
     Type: String
-    Default: photo-uploader-infra
+    Default: md5-photo-uploader-infra
     Description: Name of this infrastructure repository.
 
   GitHubDeployBranch:
@@ -80,11 +80,6 @@ Resources:
         - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
 
   # Dual-trust: GitHub Actions (OIDC) assumes this to run `cloudformation
-  # package` + `cloudformation deploy` directly; CloudFormation
-  # (cloudformation.amazonaws.com) assumes the SAME role as its execution
-  # role while actually provisioning root.yaml's 10 nested stacks. One role,
-  # so the identity that triggers the deploy and the identity that performs
-  # it are the same - no separate execution role to create/maintain by hand.
   InfraDeployRole:
     Type: AWS::IAM::Role
     Properties:

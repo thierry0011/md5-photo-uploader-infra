@@ -23,7 +23,7 @@ parameters:
   DBDeletionProtection: "false"
   DBBackupRetentionDays: "7"
   GitHubOrg: "thierry0011"
-  GitHubAppRepo: "photo-uploader-app"
+  GitHubAppRepo: "md5-photo-uploader-app"
   GitHubDeployBranch: "main"
   # bootstrap.yaml already created the account's OIDC provider - this stack
   # must not try to create a second one.
