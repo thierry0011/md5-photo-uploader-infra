@@ -304,6 +304,13 @@ Resources:
                   - rds:AddTagsToResource
                   - rds:RemoveTagsFromResource
                   - rds:ListTagsForResource
+                  # DBInstance has DeletionPolicy: Snapshot - deleting it (on
+                  # stack deletion/rollback) requires taking a final
+                  # snapshot first. Confirmed missing via a DELETE_FAILED on
+                  # DBInstance: "not authorized to perform:
+                  # rds:CreateDBSnapshot".
+                  - rds:CreateDBSnapshot
+                  - rds:DescribeDBSnapshots
                 Resource: "*"
               - Sid: DatabaseSecrets
                 Effect: Allow
