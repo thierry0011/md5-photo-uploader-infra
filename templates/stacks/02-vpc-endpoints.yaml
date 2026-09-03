@@ -2,6 +2,13 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - Interface VPC endpoints so ECS tasks in private subnets can
   reach ECR, CloudWatch Logs and Secrets Manager without a NAT Gateway.
+  Deliberately does NOT include an endpoint for pulling from public ECR
+  (public.ecr.aws): AWS's ecr-public.api PrivateLink endpoint only covers the
+  ECR Public control-plane API, not the actual image-pull data path
+  (confirmed - its PrivateDnsNames are api.ecr-public.<region>.amazonaws.com
+  / ecr-public.<region>.api.aws, neither of which is public.ecr.aws). There
+  is no VPC-endpoint route to pull a public.ecr.aws image from a private
+  subnet.
 
 Parameters:
   ProjectName:
