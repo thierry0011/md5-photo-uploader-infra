@@ -324,16 +324,23 @@ Resources:
         - Name: app
           Image: !Ref ContainerImage
           Essential: true
-          # Only takes effect for the bootstrap placeholder image (httpd's
-          # entrypoint forwards extra args straight to `httpd`, adding each
-          # as its own config directive) - two things stock httpd:2.4 gets
-          # wrong for our target groups' health checks: it only listens on
-          # :80 by default (need :8000), and it has nothing at /health/
-          # (404s, but the health check needs 200). CodeDeploy registers an
-          # entirely separate task definition from the app repo's own
+          # Only takes effect for the bootstrap placeholder image - two
+          # things stock httpd:2.4 gets wrong for our target groups' health
+          # checks: it only listens on :80 by default (need :8000), and it
+          # has nothing at /health/ (404s, but the health check needs 200).
+          # The image has no separate ENTRYPOINT, only `CMD
+          # ["httpd-foreground"]` (confirmed against docker-library/httpd's
+          # Dockerfile), so overriding Command replaces that CMD entirely -
+          # "httpd-foreground" has to be repeated here explicitly or the
+          # runtime tries to exec our first flag directly (this is exactly
+          # what happened: "exec: -C: executable file not found in $PATH").
+          # httpd-foreground's own script forwards every extra arg after it
+          # straight to `httpd` as "$@". CodeDeploy registers an entirely
+          # separate task definition from the app repo's own
           # ecs/taskdef.json once the real image is live, so none of this
           # ever reaches the real app.
           Command:
+            - "httpd-foreground"
             - "-C"
             - !Sub "Listen ${ContainerPort}"
             - "-C"
