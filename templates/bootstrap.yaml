@@ -408,6 +408,11 @@ Resources:
                   - elasticloadbalancing:ModifyTargetGroup
                   - elasticloadbalancing:ModifyTargetGroupAttributes
                   - elasticloadbalancing:DescribeTargetGroupAttributes
+                  # Needed to resolve !GetAtt TargetGroup.TargetGroupFullName
+                  # (used in this template's Outputs and 09-cicd-pipeline's
+                  # CloudWatch alarm dimensions) - confirmed missing via a
+                  # CREATE_FAILED on EcsAlbStack.
+                  - elasticloadbalancing:DescribeTargetHealth
                   - elasticloadbalancing:CreateListener
                   - elasticloadbalancing:DeleteListener
                   - elasticloadbalancing:DescribeListeners
