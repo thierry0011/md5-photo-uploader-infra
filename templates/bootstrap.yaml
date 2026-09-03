@@ -214,6 +214,20 @@ Resources:
                   - kms:DeleteAlias
                   - kms:UpdateAlias
                   - kms:ListAliases
+                  # Required for OTHER services (ECR, RDS, CloudWatch Logs,
+                  # Secrets Manager, S3) to actually use this customer
+                  # managed key, not just for describing/managing the key
+                  # resource itself - confirmed missing via a KmsException
+                  # on ECR CreateRepository (kms:CreateGrant).
+                  - kms:CreateGrant
+                  - kms:RevokeGrant
+                  - kms:ListGrants
+                  - kms:GenerateDataKey
+                  - kms:GenerateDataKeyWithoutPlaintext
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:ReEncryptFrom
+                  - kms:ReEncryptTo
                 Resource: "*"
               - Sid: SecurityGroups
                 Effect: Allow
@@ -247,6 +261,13 @@ Resources:
                   - s3:GetBucketAcl
                   - s3:PutBucketTagging
                   - s3:GetBucketTagging
+                  # CreateBucket with inline Tags checks s3:TagResource, a
+                  # distinct, newer action from s3:PutBucketTagging (which
+                  # covers a separate PutBucketTagging call after creation)
+                  # - confirmed missing via CloudTrail AccessDenied.
+                  - s3:TagResource
+                  - s3:UntagResource
+                  - s3:ListTagsForResource
                   - s3:GetBucketLocation
                   - s3:ListBucket
                 Resource: !Sub arn:${AWS::Partition}:s3:::${ProjectName}-*
@@ -296,6 +317,14 @@ Resources:
                   - secretsmanager:TagResource
                   - secretsmanager:UntagResource
                 Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-*
+              # GetRandomPassword (used by GenerateSecretString on both this
+              # stack's DBCredentialsSecret and 07-ecs-alb.yaml's
+              # DjangoSecretKey) isn't a resource-level action - IAM requires
+              # Resource: "*" for it.
+              - Sid: SecretsManagerGetRandomPassword
+                Effect: Allow
+                Action: secretsmanager:GetRandomPassword
+                Resource: "*"
 
               # ---- 05-ecr.yaml / 06-github-oidc.yaml: ECR repo + its policy ----
               - Sid: EcrRepository
@@ -425,6 +454,18 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:AWSServiceName: ecs.application-autoscaling.amazonaws.com
+
+              # 07-ecs-alb.yaml: the first ECS service in the account/region
+              # integrated with a load balancer auto-creates this
+              # service-linked role too (separate from the autoscaling one
+              # above).
+              - Sid: EcsServiceLinkedRole
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: ecs.amazonaws.com
 
               # ---- 09-cicd-pipeline.yaml: CodeStar Connections, CodePipeline,
               #      CodeDeploy, EventBridge, CloudWatch alarms ----
