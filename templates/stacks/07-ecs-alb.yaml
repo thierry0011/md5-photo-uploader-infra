@@ -324,6 +324,20 @@ Resources:
         - Name: app
           Image: !Ref ContainerImage
           Essential: true
+          # Only takes effect for the bootstrap placeholder image (httpd's
+          # entrypoint forwards extra args straight to `httpd`, adding each
+          # as its own config directive) - two things stock httpd:2.4 gets
+          # wrong for our target groups' health checks: it only listens on
+          # :80 by default (need :8000), and it has nothing at /health/
+          # (404s, but the health check needs 200). CodeDeploy registers an
+          # entirely separate task definition from the app repo's own
+          # ecs/taskdef.json once the real image is live, so none of this
+          # ever reaches the real app.
+          Command:
+            - "-C"
+            - !Sub "Listen ${ContainerPort}"
+            - "-C"
+            - "Alias /health/ /usr/local/apache2/htdocs/index.html"
           PortMappings:
             - ContainerPort: !Ref ContainerPort
               Protocol: tcp
