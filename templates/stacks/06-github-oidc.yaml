@@ -101,6 +101,22 @@ Resources:
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
                 Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-${Environment}-app
+              # Read-only - lets the app repo's workflow look up the CURRENT
+              # CloudFront domain, DB endpoint, and secret ARNs at build
+              # time instead of relying on GitHub Secrets that go stale the
+              # moment those resources are ever recreated (new random
+              # suffixes). No GetSecretValue - only enough to resolve an
+              # ARN by its stable, deterministic name.
+              - Sid: LookUpLiveInfraValues
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackResource
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${Environment}-*/*
+              - Sid: LookUpSecretArns
+                Effect: Allow
+                Action: secretsmanager:DescribeSecret
+                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-${Environment}-*
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-github-actions-role
