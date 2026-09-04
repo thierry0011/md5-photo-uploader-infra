@@ -488,6 +488,10 @@ Resources:
                   - codestar-connections:DeleteConnection
                   - codestar-connections:GetConnection
                   - codestar-connections:TagResource
+                  # Same shape as iam:PassRole - required to hand the
+                  # connection to CodePipeline for it to use. Confirmed
+                  # missing via a CREATE_FAILED on AppPipeline.
+                  - codestar-connections:PassConnection
                   - codepipeline:CreatePipeline
                   - codepipeline:DeletePipeline
                   - codepipeline:GetPipeline
