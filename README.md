@@ -58,6 +58,11 @@ mingrammer, standard AWS icons throughout):
 - [`cicd_push_flow_diagram.py`](diagrams/cicd_push_flow_diagram.py) — what
   happens when a developer pushes app code: GitHub Actions → OIDC → ECR →
   EventBridge → CodePipeline → CodeDeploy blue/green.
+- [`infra_push_flow_diagram.py`](diagrams/infra_push_flow_diagram.py) — what
+  happens when a developer pushes infra code: GitHub Actions → OIDC →
+  package to S3 → `aws cloudformation deploy` → root.yaml's 9 nested
+  stacks, versus the separate one-time Git sync path for `bootstrap.yaml`
+  and `ecr.yaml`.
 - [`user_upload_flow_diagram.py`](diagrams/user_upload_flow_diagram.py) —
   what happens when a visitor loads the gallery and uploads a photo (traced
   from the actual Django view/form code: upload goes through Django/boto3
@@ -70,6 +75,7 @@ pip install diagrams
 # install the Graphviz `dot` binary for your OS (brew/apt/choco install graphviz)
 cd diagrams && python architecture_diagram.py       # -> architecture.png
 python cicd_push_flow_diagram.py                     # -> cicd_push_flow.png
+python infra_push_flow_diagram.py                    # -> infra_push_flow.png
 python user_upload_flow_diagram.py                   # -> user_upload_flow.png
 ```
 
