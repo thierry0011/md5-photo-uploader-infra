@@ -1,10 +1,20 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - Public ALB with two target groups + two listeners (blue/green
-  for CodeDeploy), ECS Fargate cluster, task definition and service. The
-  service's DeploymentController is CODE_DEPLOY: CodeDeploy owns traffic
-  shifting between the two target groups, CloudFormation only owns the
-  initial state.
+  Photo Gallery - Public ALB with two target groups (blue/green for
+  CodeDeploy) behind a single production listener, ECS Fargate cluster,
+  task definition and service. The service's DeploymentController is
+  CODE_DEPLOY: CodeDeploy owns traffic shifting between the two target
+  groups, CloudFormation only owns the initial state.
+
+  Deliberately no second (test) listener: a test listener only adds a
+  pre-cutover manual-poke capability, and it did so by exposing the
+  not-yet-live green fleet on a public port (0.0.0.0/0) before cutover.
+  What actually gates traffic-shifting - both target groups' own health
+  checks, polled continuously regardless of which listener (if any) points
+  at them - stays exactly as rigorous either way, since CodeDeploy already
+  waits for the new task set to pass its target group's health checks
+  before shifting any production traffic to it. See
+  stacks/09-cicd-pipeline.yaml's DeploymentGroup for where that's wired.
 
 Parameters:
   ProjectName:
@@ -20,10 +30,6 @@ Parameters:
     Type: Number
     Default: 8000
 
-  TestListenerPort:
-    Type: Number
-    Default: 8080
-
   TaskCpu:
     Type: String
     Default: "512"
@@ -36,11 +42,15 @@ Parameters:
 
   ContainerImage:
     Type: String
-    Default: public.ecr.aws/docker/library/httpd:2.4
     Description: >
-      Bootstrap placeholder image so the ECS service can start before the
-      first real application image exists. The CodeDeploy pipeline replaces
-      this with the ECR app image on the first successful deployment.
+      Image the ECS service starts on. Points at this account's own
+      persistent ECR repo (templates/ecr.yaml), not the public httpd
+      placeholder that used to live here as the default - that repo now
+      survives every teardown/respin (see its Description), so once any
+      real image has ever been pushed and tagged :latest, every future
+      respin starts on it directly, no NAT Gateway needed for this pull.
+      Only a genuinely first-ever cold start (repo just created, nothing
+      pushed yet) needs a one-time manual seed - see HANDOFF.md.
 
   DjangoAllowedHosts:
     Type: String
@@ -200,16 +210,6 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref BlueTargetGroup
 
-  TestListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref ApplicationLoadBalancer
-      Port: !Ref TestListenerPort
-      Protocol: HTTP
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref GreenTargetGroup
-
   DjangoSecretKey:
     Type: AWS::SecretsManager::Secret
     DeletionPolicy: Retain
@@ -324,21 +324,21 @@ Resources:
         - Name: app
           Image: !Ref ContainerImage
           Essential: true
-          # Only takes effect for the bootstrap placeholder image - two
-          # things stock httpd:2.4 gets wrong for our target groups' health
-          # checks: it only listens on :80 by default (need :8000), and it
-          # has nothing at /health/ (404s, but the health check needs 200).
-          # The image has no separate ENTRYPOINT, only `CMD
-          # ["httpd-foreground"]` (confirmed against docker-library/httpd's
-          # Dockerfile), so overriding Command replaces that CMD entirely -
-          # "httpd-foreground" has to be repeated here explicitly or the
-          # runtime tries to exec our first flag directly (this is exactly
-          # what happened: "exec: -C: executable file not found in $PATH").
-          # httpd-foreground's own script forwards every extra arg after it
-          # straight to `httpd` as "$@". CodeDeploy registers an entirely
-          # separate task definition from the app repo's own
-          # ecs/taskdef.json once the real image is live, so none of this
-          # ever reaches the real app.
+          # Only relevant while ContainerImage still points at the one-time
+          # httpd seed image (see that parameter's Description) - two things
+          # stock httpd:2.4 gets wrong for our target groups' health checks:
+          # it only listens on :80 by default (need :8000), and it has
+          # nothing at /health/ (404s, but the health check needs 200). The
+          # image has no separate ENTRYPOINT, only `CMD ["httpd-foreground"]`
+          # (confirmed against docker-library/httpd's Dockerfile), so
+          # overriding Command replaces that CMD entirely - "httpd-foreground"
+          # has to be repeated here explicitly or the runtime tries to exec
+          # our first flag directly ("exec: -C: executable file not found in
+          # $PATH"). httpd-foreground's own script forwards every extra arg
+          # after it straight to `httpd` as "$@". Once a real Django image is
+          # live (via CodeDeploy, or already seeded as :latest), none of this
+          # ever reaches it - it's a distinct task definition from the app
+          # repo's own ecs/taskdef.json.
           Command:
             - "httpd-foreground"
             - "-C"
@@ -379,7 +379,7 @@ Resources:
 
   AppService:
     Type: AWS::ECS::Service
-    DependsOn: [ProdListener, TestListener]
+    DependsOn: [ProdListener]
     Properties:
       ServiceName: !Sub ${ProjectName}-${Environment}-service
       Cluster: !Ref EcsCluster
@@ -429,9 +429,6 @@ Outputs:
 
   ProdListenerArn:
     Value: !Ref ProdListener
-
-  TestListenerArn:
-    Value: !Ref TestListener
 
   BlueTargetGroupName:
     Value: !GetAtt BlueTargetGroup.TargetGroupName

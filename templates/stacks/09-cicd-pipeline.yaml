@@ -4,7 +4,11 @@ Description: >
   new image pushes to ECR and starts CodePipeline, which pulls the deploy
   files (ecs/taskdef.json, ecs/appspec.yaml) from the application repo and
   hands off to CodeDeploy for an ECS blue/green traffic shift between the
-  two ALB target groups.
+  two ALB target groups, through a single production listener (no test
+  listener - see stacks/07-ecs-alb.yaml's Description for why). CodeDeploy
+  still waits for the new (green) task set to pass its target group's own
+  health checks before shifting any production traffic to it, regardless of
+  listener count - that gating is independent of how many listeners exist.
 
 Parameters:
   ProjectName:
@@ -68,10 +72,6 @@ Parameters:
   ProdListenerArn:
     Type: String
     Description: Production listener ARN from the ecs-alb stack.
-
-  TestListenerArn:
-    Type: String
-    Description: Test listener ARN from the ecs-alb stack.
 
   EcsClusterName:
     Type: String
@@ -217,9 +217,6 @@ Resources:
           - ProdTrafficRoute:
               ListenerArns:
                 - !Ref ProdListenerArn
-            TestTrafficRoute:
-              ListenerArns:
-                - !Ref TestListenerArn
             TargetGroups:
               - Name: !Ref BlueTargetGroupName
               - Name: !Ref GreenTargetGroupName

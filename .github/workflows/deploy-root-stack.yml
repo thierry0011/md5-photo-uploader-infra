@@ -54,7 +54,7 @@ jobs:
           echo "PARAMS=$PARAMS" >> "$GITHUB_ENV"
           echo "TAGS=$TAGS" >> "$GITHUB_ENV"
 
-      - name: Deploy root stack (creates/updates all 10 nested stacks)
+      - name: Deploy root stack (creates/updates all 9 nested stacks)
         run: |
           aws cloudformation deploy \
             --template-file /tmp/root.packaged.yaml \

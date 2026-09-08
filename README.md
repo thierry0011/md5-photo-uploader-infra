@@ -1,15 +1,22 @@
 # Photo Gallery — Infrastructure (CloudFormation nested stacks)
 
 Infrastructure-as-code for a highly available, containerized photo gallery on
-ECS Fargate. A single **root stack** (`templates/root.yaml`) owns 10 **nested
-stacks** (network, security, vpc-endpoints, storage-cdn, database, ecr,
+ECS Fargate. A single **root stack** (`templates/root.yaml`) owns 9 **nested
+stacks** (network, security, vpc-endpoints, storage-cdn, database,
 github-oidc, ecs-alb, autoscaling, cicd-pipeline) as
 `AWS::CloudFormation::Stack` resources, wired together with `!GetAtt`.
 
-Two different deploy mechanisms are used, deliberately:
+Three different deploy mechanisms are used, deliberately:
 - **`bootstrap.yaml`** (one-time prerequisite, not part of the nested tree)
   is deployed via **AWS CloudFormation Git sync** — small, security-sensitive,
   rarely changes, benefits from the PR-review step Git sync gives you.
+- **`ecr.yaml`** (the app's ECR repository, also not part of the nested tree)
+  is likewise deployed via **Git sync**, standalone, and — unlike everything
+  under `root.yaml` — is never torn down: it's the one piece of application
+  state meant to survive a full teardown/respin cycle, so the last working
+  image doesn't have to be rebuilt from scratch every time. See that
+  template's own Description for the full reasoning (including why it uses
+  its own dedicated KMS key instead of the shared one).
 - **`root.yaml`** (the actual application infra) is deployed by
   `.github/workflows/deploy-root-stack.yml`: on every push touching
   `templates/root.yaml`, `templates/stacks/**`, or `deployments/root.yaml`,
@@ -31,7 +38,8 @@ Internet ──HTTP───▶ ALB (public subnets, 2 AZ)
                        ▼
               ECS Fargate service (private subnets, 2 AZ)
               ├─ Blue target group  (prod listener :80)
-              └─ Green target group (test listener :8080)
+              └─ Green target group (no listener - CodeDeploy shifts :80
+                                      between blue/green directly)
                        │
                        ▼
               RDS PostgreSQL (private subnets, db.t3)
@@ -79,26 +87,24 @@ job finishes. There is no generated file to accidentally hand-edit.
 | Stack | Template | Creates | Depends on (via `!GetAtt`) |
 |---|---|---|---|
 | — | `bootstrap.yaml` (standalone, **not nested**) | S3 bucket for packaged templates, `InfraDeployRole` (dual-trust: GitHub OIDC for this repo's deploy workflow + `cloudformation.amazonaws.com` as root's execution role) | — |
+| — | `ecr.yaml` (standalone, **not nested**, survives teardown) | ECR repository for the app image, its own dedicated KMS CMK, repo policy trusting the OIDC role | GithubOidc's role ARN (passed as a literal parameter value, not `!GetAtt` — see below) |
 | `NetworkStack` | `stacks/00-network.yaml` | VPC, public/private subnets (2 AZ), routing, S3 gateway endpoint | — |
 | `SecurityStack` | `stacks/01-security.yaml` | Security groups, shared KMS CMK | Network |
 | `VpcEndpointsStack` | `stacks/02-vpc-endpoints.yaml` | Interface endpoints: ECR api/dkr, CloudWatch Logs, Secrets Manager | Network, Security |
 | `StorageCdnStack` | `stacks/03-storage-cdn.yaml` | S3 image bucket, CloudFront + OAC, access-logs bucket | Security |
 | `DatabaseStack` | `stacks/04-database.yaml` | RDS PostgreSQL, Secrets Manager credentials | Network, Security |
 | `GithubOidcStack` | `stacks/06-github-oidc.yaml` | GitHub OIDC provider + role for app CI | — |
-| `EcrStack` | `stacks/05-ecr.yaml` | ECR repository for the app image, repo policy trusting the OIDC role | Security, GithubOidc |
 | `EcsAlbStack` | `stacks/07-ecs-alb.yaml` | ALB (2 target groups, 2 listeners), ECS cluster/service/task def | Network, Security, StorageCdn, Database |
 | `AutoscalingStack` | `stacks/08-autoscaling.yaml` | Application Auto Scaling (1–4 tasks, CPU target tracking) | EcsAlb |
-| `CicdPipelineStack` | `stacks/09-cicd-pipeline.yaml` | CodeStar connection, CodePipeline, CodeDeploy blue/green, EventBridge trigger | Security, Ecr, EcsAlb |
+| `CicdPipelineStack` | `stacks/09-cicd-pipeline.yaml` | CodeStar connection, CodePipeline, CodeDeploy blue/green, EventBridge trigger | Security, EcsAlb, plus `EcrRepositoryName`/`Arn` passed into `root.yaml` as plain parameters (from `ecr.yaml`'s outputs) |
 
-`GithubOidcStack` and `EcrStack` are listed out of numeric order because
-that's the real dependency direction: `EcrStack`'s repository policy needs
-`GithubOidcStack`'s role ARN. Deliberately one-directional — see the
-comments at the top of `stacks/05-ecr.yaml` and `stacks/06-github-oidc.yaml`
-for why (this used to be a genuine circular dependency in the old flat-stack
-design, requiring a manual two-deploy dance; nested-stack ordering fixes it
-for real instead of just relocating the hack).
+`ecr.yaml`'s repository policy needs `GithubOidcStack`'s role ARN, but
+that role's name is deterministic, so its ARN is stable across every
+`root.yaml` respin — `ecr.yaml` takes it as a literal parameter value in
+`deployments/ecr.yaml` rather than a cross-stack reference, since it's
+deployed independently of the nested tree that `GithubOidcStack` lives in.
 
-## Two-phase deploy lifecycle
+## Three-phase deploy lifecycle
 
 **Phase 1 — bootstrap (one-time, standalone, do this first).**
 `templates/bootstrap.yaml` / `deployments/bootstrap.yaml`, deployed via Git
@@ -107,12 +113,20 @@ sync, create the S3 bucket that packaged templates get uploaded to, and
 `bootstrap.yaml` is **not part of the nested-stack tree** — `root.yaml`
 never supersedes, absorbs, or manages it.
 
-**Phase 2 — the nested stack (ongoing).** Push a change to
+**Phase 2 — the ECR repository (one-time, standalone, deploy once and leave
+running).** `templates/ecr.yaml` / `deployments/ecr.yaml`, also deployed via
+Git sync using `InfraDeployRole` as its execution role. Unlike everything in
+Phase 3, this is never torn down between respins — it's the one piece of
+application state deliberately meant to survive a full teardown, so the
+last working app image is still there the next time you spin the lab back
+up. See that template's Description for why it uses its own dedicated CMK.
+
+**Phase 3 — the nested stack (ongoing, fully disposable).** Push a change to
 `templates/root.yaml`, `templates/stacks/**`, or `deployments/root.yaml` →
 `.github/workflows/deploy-root-stack.yml` assumes `InfraDeployRole` via
 OIDC, packages `root.yaml` to a local, never-committed file, and runs
 `aws cloudformation deploy` against it in that same job — creating or
-updating the root stack and its 10 nested children in one pass.
+updating the root stack and its 9 nested children in one pass.
 
 ## Why root.yaml isn't Git-sync-deployed
 
@@ -133,21 +147,22 @@ Two independent reasons converged on this design:
 `InfraDeployRole`'s trust policy reflects this directly: one statement lets
 GitHub Actions assume it via OIDC (to call `aws cloudformation deploy`), a
 second lets `cloudformation.amazonaws.com` assume the *same* role (as the
-execution role that actually provisions every resource in the 10 nested
-stacks) — one role, two callers, no separate execution role to create by
-hand.
+execution role that actually provisions every resource in the 9 nested
+stacks, and also `ecr.yaml`'s Git-sync-managed resources) — one role, two
+callers, no separate execution role to create by hand.
 
 ## One-time prerequisites (console, unavoidable manual steps)
 
-Git sync (for `bootstrap.yaml`) and CodePipeline's GitHub source (in
-`CicdPipelineStack`) both rely on **AWS CodeConnections**, which requires a
-one-time interactive OAuth handshake — this cannot be scripted or done via
-CloudFormation itself.
+Git sync (for `bootstrap.yaml` and `ecr.yaml`) and CodePipeline's GitHub
+source (in `CicdPipelineStack`) both rely on **AWS CodeConnections**, which
+requires a one-time interactive OAuth handshake — this cannot be scripted or
+done via CloudFormation itself.
 
 1. **Link this repo for Git sync**: CloudFormation console → *Stacks* →
    *Create stack* → *With new resources* → *Sync from Git* → *Link a Git
    repository* → GitHub → authorize AWS's GitHub App for this repo. (Only
-   needed for `bootstrap.yaml` — `root.yaml` doesn't use Git sync.)
+   needed once, for `bootstrap.yaml` and `ecr.yaml` — `root.yaml` doesn't
+   use Git sync.)
 2. **Authorize the application repo's connection**: after `CicdPipelineStack`
    is created, open **Developer Tools → Connections** in the console once
    and click **Update pending connection** on the connection named in the
@@ -162,33 +177,65 @@ CloudFormation itself.
    role, created by hand (console *Create role*, since nothing exists yet to
    create it for you) — scoped narrowly to just what `bootstrap.yaml`
    itself creates (S3 bucket + IAM role/OIDC provider).
-2. From `bootstrap.yaml`'s outputs, add two **repository secrets** (Settings
+2. **Deploy `ecr.yaml`** via Git sync the same way, deployment file
+   `deployments/ecr.yaml`, using `InfraDeployRole` (from step 1) as its
+   execution role — no new role needed, its existing ECR/KMS permissions
+   already cover this. Fill in `GitHubActionsRoleArn` first: it's the
+   deterministic ARN `stacks/06-github-oidc.yaml` will produce
+   (`arn:aws:iam::<account>:role/<ProjectName>-<Environment>-github-actions-ecr-push`),
+   stable and predictable even though `GithubOidcStack` itself doesn't exist
+   yet at this point. Do this **once** — never delete this stack as part of
+   a normal teardown/respin.
+3. From `bootstrap.yaml`'s outputs, add two **repository secrets** (Settings
    → Secrets and variables → Actions): `AWS_ROLE_ARN` ← `InfraDeployRoleArn`,
-   `TEMPLATES_BUCKET` ← `TemplatesBucketName`.
-3. Push to `main` (or run `deploy-root-stack.yml` manually via
+   `TEMPLATES_BUCKET` ← `TemplatesBucketName`. From `ecr.yaml`'s outputs, fill
+   `EcrRepositoryName` / `EcrRepositoryArn` into `deployments/root.yaml`.
+4. Push to `main` (or run `deploy-root-stack.yml` manually via
    *Actions → Run workflow*) — this packages and deploys the root stack plus
-   all 10 nested children in one run. Fill in `GitHubOrg` / `GitHubAppRepo`
+   all 9 nested children in one run. Fill in `GitHubOrg` / `GitHubAppRepo`
    in `deployments/root.yaml` first if they differ from the defaults.
-4. Complete the CodeConnections handshake for the app repo (see above).
-5. Put the root stack's `GitHubActionsRoleArn` output into the app repo's
+5. Complete the CodeConnections handshake for the app repo (see above).
+6. Put the root stack's `GitHubActionsRoleArn` output into the app repo's
    `.github/workflows/build-and-push.yml` as `AWS_ROLE_ARN`.
 
-Unlike the old flat-stack design, there's no manual "redeploy 05 with 06's
-role ARN pasted in" step anymore — nested-stack ordering resolves that
-dependency automatically on every deploy.
+On any later respin, only steps 4–6 repeat — `bootstrap.yaml` and
+`ecr.yaml` are both one-time, standalone, and untouched by
+`scripts/teardown.sh`.
 
 ## Bootstrapping the first deploy
 
-`07-ecs-alb.yaml` starts the ECS service on a placeholder image
-(`public.ecr.aws/docker/library/httpd:2.4`) so the service has something
-valid to run before your app image exists. Once:
+`ContainerImage` in `deployments/root.yaml` points at this account's own
+persistent ECR repo (`templates/ecr.yaml`), not a public placeholder - that
+repo survives every teardown/respin, so on any respin after the first real
+push, ECS just starts on the last working image directly. No NAT Gateway
+needed for this pull: it comes from your own repo, reachable through the
+`ecr.api`/`ecr.dkr` VPC endpoints alone.
+
+The one exception is a genuinely first-ever cold start - `ecr.yaml` just
+deployed, nothing pushed to it yet, `:latest` doesn't exist. `root.yaml`
+would fail to create the ECS service pointing at a tag that isn't there.
+Seed it once, manually, before deploying `root.yaml` for the very first
+time (from a machine with internet access - this pull, unlike the task's,
+isn't going through any VPC endpoint at all):
+
+```bash
+aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS --password-stdin 711387109786.dkr.ecr.us-east-1.amazonaws.com
+
+docker pull public.ecr.aws/docker/library/httpd:2.4
+docker tag public.ecr.aws/docker/library/httpd:2.4 \
+  711387109786.dkr.ecr.us-east-1.amazonaws.com/photo-gallery-dev-app:latest
+docker push 711387109786.dkr.ecr.us-east-1.amazonaws.com/photo-gallery-dev-app:latest
+```
+
+After that one-time seed, deploy `root.yaml` as normal. Once:
 
 1. The application repo's GitHub Actions workflow has pushed at least one
-   image tagged `latest` to ECR, and
+   real image tagged `latest` to ECR, and
 2. `CicdPipelineStack` exists,
 
-the EventBridge rule fires automatically and CodeDeploy performs the first
-real blue/green deployment, replacing the placeholder with your Django app.
+the EventBridge rule fires automatically and CodeDeploy performs a real
+blue/green deployment, replacing whatever was there with your Django app.
 
 ## Getting the ALB endpoint
 
@@ -233,9 +280,12 @@ and are unaffected by root-stack rollback or deletion.
   Manager are all reached via VPC endpoints. Saves ~$32/mo per AZ plus data
   processing charges. Flip to `"true"` in `deployments/root.yaml` if the app
   ever needs outbound internet access.
-- **RDS Multi-AZ is off by default** (`DBMultiAZ: "false"`) — the VPC itself
-  is Multi-AZ (subnets in 2 AZs) per the requirement, but a standby RDS
-  replica roughly doubles DB cost. Flip on for a real production posture.
+- **RDS Multi-AZ is on** (`DBMultiAZ: "true"`) — a standby replica in the
+  second AZ with automatic failover, roughly doubling DB cost, but without
+  it the database is a single point of failure in one AZ while every other
+  tier (ALB, ECS, NAT) is genuinely spread across both - inconsistent with
+  the "highly available" requirement. Flip to `"false"` only if minimizing
+  cost matters more than that for a given run.
 - **S3 bucket is fully private**; CloudFront reads it only via Origin Access
   Control scoped to this exact distribution ARN (`AWS:SourceArn` condition).
 - **All data at rest is KMS-encrypted** with a single rotated CMK (S3, RDS,
@@ -249,20 +299,13 @@ and are unaffected by root-stack rollback or deletion.
   passes to `aws cloudformation deploy --tags` and which nested stacks then
   inherit from the root stack automatically.
 
-## Tearing down
+## Tearing down / spinning back up later
 
-There's no Git-sync PR to merge for a root-stack deletion since it isn't
-Git-sync-managed — delete it directly:
-
-```bash
-aws cloudformation delete-stack --stack-name photo-gallery-dev-root
-```
-
-CloudFormation deletes all 10 nested stacks for you, in reverse dependency
-order. `DBInstance` and `ImagesBucket` (and a few others — see each
-template's `DeletionPolicy`) are retained on deletion (`Snapshot` /
-`Retain`) so you won't lose data or an RDS snapshot by accident — clean
-those up manually if you're done with the lab. Delete `bootstrap.yaml`'s
-stack (still Git-sync-managed, so via the console or a PR that removes it)
-separately, last, once you're sure you won't need to deploy the nested tree
-again.
+See [`HANDOFF.md`](HANDOFF.md) — the full down/up runbook, with today's
+actual resource names filled in (no re-deriving anything from CloudTrail
+next time) and `scripts/teardown.sh`, which deletes the root stack (cascades
+all 9 nested stacks automatically) and then cleans up exactly the handful
+of resources their `Retain`/`Snapshot` `DeletionPolicy`s deliberately leave
+behind — no manual per-resource hunting. `bootstrap.yaml` and `ecr.yaml` are
+both untouched by the script on purpose — see "Three-phase deploy lifecycle"
+above.

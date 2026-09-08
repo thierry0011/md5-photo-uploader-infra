@@ -129,7 +129,7 @@ Resources:
                 Action: s3:ListBucket
                 Resource: !GetAtt TemplatesBucket.Arn
 
-              # ---- CloudFormation: the root stack + its 10 nested children
+              # ---- CloudFormation: the root stack + its 9 nested children
               #      (nested stack physical names are always prefixed with
               #      the parent's, so one wildcard covers both) ----
               - Sid: CloudFormationStackOperations
@@ -196,7 +196,11 @@ Resources:
                   - ec2:DescribeTags
                 Resource: "*"
 
-              # ---- 01-security.yaml: KMS CMK + security groups ----
+              # ---- 01-security.yaml's shared CMK, AND templates/ecr.yaml's
+              #      dedicated EcrKmsKey (deployed standalone via Git sync,
+              #      using this same role as its execution role) - both
+              #      covered by this one Resource: "*" statement, no
+              #      per-key scoping needed ----
               - Sid: SecurityKms
                 Effect: Allow
                 Action:
@@ -333,7 +337,11 @@ Resources:
                 Action: secretsmanager:GetRandomPassword
                 Resource: "*"
 
-              # ---- 05-ecr.yaml / 06-github-oidc.yaml: ECR repo + its policy ----
+              # ---- templates/ecr.yaml: ECR repo + its policy. Deployed
+              #      standalone via Git sync (like this stack), not as a
+              #      nested nested stack under root.yaml - this Sid is
+              #      scoped by resource-name pattern, not by which template
+              #      creates the repository, so it already covers it ----
               - Sid: EcrRepository
                 Effect: Allow
                 Action:

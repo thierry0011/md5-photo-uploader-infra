@@ -83,7 +83,7 @@ with Diagram(
 
     users >> Edge(label="HTTPS") >> cdn >> Edge(label="OAC") >> images_bucket
     users >> Edge(label="HTTP") >> alb >> Edge(label=":8000") >> svc_blue
-    alb >> Edge(style="dashed", label="test listener") >> svc_green
+    alb >> Edge(style="dashed", label="CodeDeploy shifts traffic here") >> svc_green
 
     igw >> alb
 

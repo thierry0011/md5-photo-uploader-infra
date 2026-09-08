@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Photo Gallery - persistent ECR repository for the Django application image.
+  Deliberately NOT part of root.yaml's nested-stack tree and NOT touched by
+  scripts/teardown.sh: this is the one piece of application state meant to
+  survive a full teardown/respin cycle, so the last working app image never
+  has to be rebuilt or re-pushed after tearing the rest of the lab down.
+  Deployed once via CloudFormation Git sync (like bootstrap.yaml), using
+  InfraDeployRole (from bootstrap.yaml) as its execution role - that role's
+  existing EcrRepository/SecurityKms policy statements already cover
+  everything this template needs (both are scoped by resource-name pattern,
+  not by which template creates the resource), so no new IAM permissions
+  are required to deploy this.
+
+  Uses its own dedicated CMK (EcrKmsKey) rather than the shared AppKmsKey
+  from stacks/01-security.yaml on purpose: that key lives inside
+  SecurityStack, which is destroyed on every teardown, and
+  scripts/teardown.sh now schedules its actual deletion after a grace
+  period. If this repository used that same key, a scheduled key deletion
+  would eventually make every retained image permanently unreadable -
+  exactly backwards for a resource whose entire point is to survive
+  teardown. EcrKmsKey is Retain'd, keeps its own alias forever, and is never
+  touched by teardown.sh or the KMS orphan-cleanup scan (that scan skips
+  anything still aliased, and this key always stays aliased).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-gallery
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  GitHubActionsRoleArn:
+    Type: String
+    Description: >
+      ARN of the GitHub Actions OIDC push role created by
+      stacks/06-github-oidc.yaml (photo-gallery-<env>-github-actions-ecr-push).
+      Passed as a literal value here rather than a cross-stack reference:
+      that role's name is deterministic, so its ARN is stable across every
+      root.yaml respin.
+
+Resources:
+  # ---------------- Dedicated CMK (never shared with the ephemeral tree) ----------------
+  EcrKmsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub Dedicated CMK for ${ProjectName}-${Environment} ECR (persists across respins, never shared with root.yaml's SecurityStack key)
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: RootAccountFullAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: "kms:*"
+            Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-ecr-cmk
+
+  EcrKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${ProjectName}-${Environment}-ecr
+      TargetKeyId: !Ref EcrKmsKey
+
+  # ---------------- ECR repository (Retain - the actual point of this stack) ----------------
+  AppRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub ${ProjectName}-${Environment}-app
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      EncryptionConfiguration:
+        EncryptionType: KMS
+        KmsKey: !GetAtt EcrKmsKey.Arn
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 1 day",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 1
+                },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep only the last 10 tagged images",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["v", "main", "sha-"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowGitHubActionsPush
+            Effect: Allow
+            Principal:
+              AWS: !Ref GitHubActionsRoleArn
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:PutImage
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-app-repo
+
+Outputs:
+  RepositoryName:
+    Value: !Ref AppRepository
+
+  RepositoryArn:
+    Value: !GetAtt AppRepository.Arn
+
+  RepositoryUri:
+    Value: !GetAtt AppRepository.RepositoryUri
+
+  EcrKmsKeyArn:
+    Value: !GetAtt EcrKmsKey.Arn

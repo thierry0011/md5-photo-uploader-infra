@@ -1,20 +1,27 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - root nested-stack template. Owns all 10 child stacks
-  (network, security, vpc-endpoints, storage-cdn, database, ecr,
-  github-oidc, ecs-alb, autoscaling, cicd-pipeline) as
-  AWS::CloudFormation::Stack resources, wiring cross-stack values via
-  !GetAtt instead of Fn::Export/Fn::ImportValue. This is a single flat
-  nesting (no intermediate grouping stacks) because the dependency graph
-  crosses too many boundaries for grouping to pay for itself - see
-  07-ecs-alb below, which pulls from network, security, storage-cdn and
-  database all at once.
+  Photo Gallery - root nested-stack template. Owns all 9 child stacks
+  (network, security, vpc-endpoints, storage-cdn, database, github-oidc,
+  ecs-alb, autoscaling, cicd-pipeline) as AWS::CloudFormation::Stack
+  resources, wiring cross-stack values via !GetAtt instead of
+  Fn::Export/Fn::ImportValue. This is a single flat nesting (no intermediate
+  grouping stacks) because the dependency graph crosses too many boundaries
+  for grouping to pay for itself - see 07-ecs-alb below, which pulls from
+  network, security, storage-cdn and database all at once.
   DEPLOYED BY: .github/workflows/deploy-root-stack.yml, which packages this
   file to S3 and runs `aws cloudformation deploy` in the same job run - the
   packaged template is never written into the repo or committed anywhere,
   it exists only as a local file inside that job. Not Git-sync-deployed.
-  PREREQUISITE: templates/bootstrap.yaml must already be deployed - it is
-  not part of this nested-stack tree and is never superseded by it.
+  PREREQUISITES: templates/bootstrap.yaml and templates/ecr.yaml must
+  already be deployed - neither is part of this nested-stack tree, neither
+  is ever superseded by it, and ecr.yaml in particular is never torn down
+  by scripts/teardown.sh (its whole purpose is to survive a full
+  teardown/respin cycle - see that template's own Description). This
+  template takes the ECR repository's name/ARN as plain Parameters
+  (EcrRepositoryName/EcrRepositoryArn) rather than a nested-stack
+  cross-reference, sourced from ecr.yaml's outputs once and pasted into
+  deployments/root.yaml - they're stable across respins since the
+  repository name is deterministic.
 
 Parameters:
   ProjectName:
@@ -56,10 +63,6 @@ Parameters:
   ContainerPort:
     Type: Number
     Default: 8000
-
-  TestListenerPort:
-    Type: Number
-    Default: 8080
 
   # ---- database ----
   DBInstanceClass:
@@ -128,7 +131,11 @@ Parameters:
 
   ContainerImage:
     Type: String
-    Default: public.ecr.aws/docker/library/httpd:2.4
+    Description: >
+      Account-specific (own persistent ECR repo URI) - no sensible generic
+      default, always supplied explicitly by deployments/root.yaml. See
+      stacks/07-ecs-alb.yaml's ContainerImage Description for the full
+      reasoning.
 
   DjangoAllowedHosts:
     Type: String
@@ -151,6 +158,16 @@ Parameters:
   DeploymentTimeoutMinutes:
     Type: Number
     Default: 15
+
+  # ---- ecr (persistent, deployed standalone via templates/ecr.yaml - see
+  #      that template's Description for why it lives outside this tree) ----
+  EcrRepositoryName:
+    Type: String
+    Description: ECR repository name, output by the standalone templates/ecr.yaml stack.
+
+  EcrRepositoryArn:
+    Type: String
+    Description: ECR repository ARN, output by the standalone templates/ecr.yaml stack.
 
 Resources:
   NetworkStack:
@@ -178,7 +195,6 @@ Resources:
         ProjectName: !Ref ProjectName
         Environment: !Ref Environment
         ContainerPort: !Ref ContainerPort
-        TestListenerPort: !Ref TestListenerPort
         VpcId: !GetAtt NetworkStack.Outputs.VpcId
         VpcCidr: !GetAtt NetworkStack.Outputs.VpcCidr
       Tags:
@@ -250,19 +266,6 @@ Resources:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-github-oidc
 
-  EcrStack:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: ./stacks/05-ecr.yaml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        Environment: !Ref Environment
-        AppKmsKeyArn: !GetAtt SecurityStack.Outputs.AppKmsKeyArn
-        GitHubActionsRoleArn: !GetAtt GithubOidcStack.Outputs.GitHubActionsRoleArn
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-${Environment}-ecr
-
   EcsAlbStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -271,7 +274,6 @@ Resources:
         ProjectName: !Ref ProjectName
         Environment: !Ref Environment
         ContainerPort: !Ref ContainerPort
-        TestListenerPort: !Ref TestListenerPort
         TaskCpu: !Ref TaskCpu
         TaskMemory: !Ref TaskMemory
         ContainerImage: !Ref ContainerImage
@@ -325,15 +327,14 @@ Resources:
         GitHubDeployBranch: !Ref GitHubDeployBranch
         DeploymentTimeoutMinutes: !Ref DeploymentTimeoutMinutes
         AppKmsKeyArn: !GetAtt SecurityStack.Outputs.AppKmsKeyArn
-        EcrRepositoryName: !GetAtt EcrStack.Outputs.RepositoryName
-        EcrRepositoryArn: !GetAtt EcrStack.Outputs.RepositoryArn
+        EcrRepositoryName: !Ref EcrRepositoryName
+        EcrRepositoryArn: !Ref EcrRepositoryArn
         AlbFullName: !GetAtt EcsAlbStack.Outputs.AlbFullName
         BlueTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.BlueTargetGroupFullName
         GreenTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.GreenTargetGroupFullName
         BlueTargetGroupName: !GetAtt EcsAlbStack.Outputs.BlueTargetGroupName
         GreenTargetGroupName: !GetAtt EcsAlbStack.Outputs.GreenTargetGroupName
         ProdListenerArn: !GetAtt EcsAlbStack.Outputs.ProdListenerArn
-        TestListenerArn: !GetAtt EcsAlbStack.Outputs.TestListenerArn
         EcsClusterName: !GetAtt EcsAlbStack.Outputs.EcsClusterName
         EcsServiceName: !GetAtt EcsAlbStack.Outputs.EcsServiceName
         TaskExecutionRoleArn: !GetAtt EcsAlbStack.Outputs.TaskExecutionRoleArn
@@ -349,8 +350,11 @@ Outputs:
   CloudFrontDomainName:
     Value: !GetAtt StorageCdnStack.Outputs.CloudFrontDomainName
 
-  EcrRepositoryUri:
-    Value: !GetAtt EcrStack.Outputs.RepositoryUri
+  EcrRepositoryArn:
+    Value: !Ref EcrRepositoryArn
+    Description: >
+      Same value passed in as a parameter - the repository itself lives in
+      the standalone templates/ecr.yaml stack, not here.
 
   GitHubActionsRoleArn:
     Value: !GetAtt GithubOidcStack.Outputs.GitHubActionsRoleArn
