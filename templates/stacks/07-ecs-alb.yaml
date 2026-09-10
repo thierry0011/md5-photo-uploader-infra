@@ -85,10 +85,6 @@ Parameters:
     Type: String
     Description: ECS task security group id from the security stack.
 
-  AppKmsKeyId:
-    Type: String
-    Description: Shared CMK key id from the security stack.
-
   AppKmsKeyArn:
     Type: String
     Description: Shared CMK ARN from the security stack.
@@ -210,20 +206,6 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref BlueTargetGroup
 
-  DjangoSecretKey:
-    Type: AWS::SecretsManager::Secret
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Name: !Sub ${ProjectName}-${Environment}-django-secret-key
-      Description: Django SECRET_KEY, generated once and injected into the task at runtime.
-      GenerateSecretString:
-        SecretStringTemplate: "{}"
-        GenerateStringKey: SECRET_KEY
-        PasswordLength: 50
-        ExcludePunctuation: true
-      KmsKeyId: !Ref AppKmsKeyId
-
   # ---------------- ECS ----------------
   EcsCluster:
     Type: AWS::ECS::Cluster
@@ -265,9 +247,20 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource:
-                  - !Ref DBCredentialsSecretArn
-                  - !Ref DjangoSecretKey
+                Resource: !Ref DBCredentialsSecretArn
+        - PolicyName: ReadDjangoSecretKeyParameter
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+
+                Action: ssm:GetParameters
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-django-secret-key
+              - Effect: Allow
+
+                Action: kms:Decrypt
+                Resource: !ImportValue
+                  Fn::Sub: ${ProjectName}-${Environment}-ecr-kms-key-arn
         - PolicyName: DecryptWithAppKey
           PolicyDocument:
             Version: "2012-10-17"
@@ -324,21 +317,6 @@ Resources:
         - Name: app
           Image: !Ref ContainerImage
           Essential: true
-          # Only relevant while ContainerImage still points at the one-time
-          # httpd seed image (see that parameter's Description) - two things
-          # stock httpd:2.4 gets wrong for our target groups' health checks:
-          # it only listens on :80 by default (need :8000), and it has
-          # nothing at /health/ (404s, but the health check needs 200). The
-          # image has no separate ENTRYPOINT, only `CMD ["httpd-foreground"]`
-          # (confirmed against docker-library/httpd's Dockerfile), so
-          # overriding Command replaces that CMD entirely - "httpd-foreground"
-          # has to be repeated here explicitly or the runtime tries to exec
-          # our first flag directly ("exec: -C: executable file not found in
-          # $PATH"). httpd-foreground's own script forwards every extra arg
-          # after it straight to `httpd` as "$@". Once a real Django image is
-          # live (via CodeDeploy, or already seeded as :latest), none of this
-          # ever reaches it - it's a distinct task definition from the app
-          # repo's own ecs/taskdef.json.
           Command:
             - "httpd-foreground"
             - "-C"
@@ -369,7 +347,9 @@ Resources:
             - Name: POSTGRES_PASSWORD
               ValueFrom: !Sub "${DBCredentialsSecretArn}:password::"
             - Name: DJANGO_SECRET_KEY
-              ValueFrom: !Sub "${DjangoSecretKey}:SECRET_KEY::"
+              # SecureString in Parameter Store, created once by hand
+
+              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-django-secret-key
           LogConfiguration:
             LogDriver: awslogs
             Options:

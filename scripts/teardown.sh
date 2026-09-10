@@ -41,7 +41,6 @@ IMAGES_BUCKET="${PROJECT}-${ENV}-images-${ACCOUNT_ID}"
 ACCESS_LOGS_BUCKET="${PROJECT}-${ENV}-access-logs-${ACCOUNT_ID}"
 PIPELINE_ARTIFACT_BUCKET="${PROJECT}-${ENV}-pipeline-artifacts-${ACCOUNT_ID}"
 DB_SECRET="${PROJECT}-${ENV}-db-credentials"
-DJANGO_SECRET="${PROJECT}-${ENV}-django-secret-key"
 KMS_ALIAS="alias/${PROJECT}-${ENV}"
 
 aws() { command aws --profile "$PROFILE" --region "$REGION" "$@"; }
@@ -128,8 +127,13 @@ echo "==> Cleaning up retained resources..."
 
 # 3a. Secrets Manager - force-delete (no recovery window) so a respin can
 #     recreate a secret with the same name immediately, instead of hitting
-#     "already scheduled for deletion".
-for secret in "$DB_SECRET" "$DJANGO_SECRET"; do
+#     "already scheduled for deletion". Does NOT include the Django secret
+#     key: that's a manually-created SSM SecureString parameter now (see
+#     07-ecs-alb.yaml's TaskExecutionRole), never owned by CloudFormation,
+#     so root-stack deletion never touches it in the first place - same
+#     "survives every teardown/respin on purpose" treatment as ecr.yaml's
+#     repository.
+for secret in "$DB_SECRET"; do
   if aws secretsmanager describe-secret --secret-id "$secret" >/dev/null 2>&1; then
     aws secretsmanager delete-secret --secret-id "$secret" --force-delete-without-recovery >/dev/null
     echo "    deleted secret: $secret"

@@ -7,7 +7,6 @@ parameters:
   PublicSubnet2Cidr: "10.20.1.0/24"
   PrivateSubnet1Cidr: "10.20.10.0/24"
   PrivateSubnet2Cidr: "10.20.11.0/24"
-  EnableNatGateway: "false"
   ContainerPort: "8000"
   DBInstanceClass: db.t3.micro
   DBAllocatedStorage: "20"
@@ -35,9 +34,10 @@ parameters:
   CpuTargetValue: "60"
   DeploymentTimeoutMinutes: "15"
   # Output by the standalone templates/ecr.yaml stack (deployed once via Git
-  # sync, never touched by teardown). Both are deterministic - the repo name
-  # pattern and standard ECR ARN format - so these are safe to hardcode.
-  EcrRepositoryName: "photo-gallery-dev-app"
+  # sync, never touched by teardown). Deterministic - standard ECR ARN
+  # format - so safe to hardcode. (No EcrRepositoryName parameter anymore -
+  # nothing in the nested-stack tree needs it since 09-cicd-pipeline.yaml
+  # triggers off its own S3 artifact bucket instead of ECR pushes.)
   EcrRepositoryArn: "arn:aws:ecr:us-east-1:711387109786:repository/photo-gallery-dev-app"
 tags:
   Project: photo-gallery

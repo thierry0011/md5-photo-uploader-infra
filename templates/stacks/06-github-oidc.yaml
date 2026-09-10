@@ -117,6 +117,13 @@ Resources:
                 Effect: Allow
                 Action: secretsmanager:DescribeSecret
                 Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-${Environment}-*
+              # Same read-only ARN lookup as above, for the Django secret key
+              # now that it lives in Parameter Store instead of Secrets
+              # Manager - no WithDecryption, so no kms:Decrypt needed either.
+              - Sid: LookUpSsmParameterArns
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-*
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-github-actions-role

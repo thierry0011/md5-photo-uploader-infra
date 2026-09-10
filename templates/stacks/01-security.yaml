@@ -100,19 +100,15 @@ Resources:
     Properties:
       GroupDescription: ECS tasks - allows inbound only from the ALB on the container port
       VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+          Description: Container port from ALB
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-ecs-sg
-
-  EcsIngressFromAlb:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref EcsSecurityGroup
-      IpProtocol: tcp
-      FromPort: !Ref ContainerPort
-      ToPort: !Ref ContainerPort
-      SourceSecurityGroupId: !Ref AlbSecurityGroup
-      Description: Container port from ALB
 
   RdsSecurityGroup:
     Type: AWS::EC2::SecurityGroup

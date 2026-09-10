@@ -180,12 +180,6 @@ Resources:
                   - ec2:DisassociateRouteTable
                   - ec2:ReplaceRouteTableAssociation
                   - ec2:DescribeRouteTables
-                  - ec2:AllocateAddress
-                  - ec2:ReleaseAddress
-                  - ec2:DescribeAddresses
-                  - ec2:CreateNatGateway
-                  - ec2:DeleteNatGateway
-                  - ec2:DescribeNatGateways
                   - ec2:CreateVpcEndpoint
                   - ec2:DeleteVpcEndpoints
                   - ec2:ModifyVpcEndpoint
@@ -328,10 +322,13 @@ Resources:
                   - secretsmanager:TagResource
                   - secretsmanager:UntagResource
                 Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-*
-              # GetRandomPassword (used by GenerateSecretString on both this
-              # stack's DBCredentialsSecret and 07-ecs-alb.yaml's
-              # DjangoSecretKey) isn't a resource-level action - IAM requires
-              # Resource: "*" for it.
+              # GetRandomPassword (used by GenerateSecretString on this
+              # stack's DBCredentialsSecret) isn't a resource-level action -
+              # IAM requires Resource: "*" for it. The Django secret key no
+              # longer lives here - it's a hand-created SSM SecureString
+              # parameter now (see 07-ecs-alb.yaml's TaskExecutionRole and
+              # README.md's "Bootstrapping the first deploy"), so this role
+              # never needs to touch it.
               - Sid: SecretsManagerGetRandomPassword
                 Effect: Allow
                 Action: secretsmanager:GetRandomPassword

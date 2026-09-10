@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - Interface VPC endpoints so ECS tasks in private subnets can
-  reach ECR, CloudWatch Logs and Secrets Manager without a NAT Gateway.
+  reach ECR, CloudWatch Logs, Secrets Manager and Parameter Store without a
+  NAT Gateway.
   Deliberately does NOT include an endpoint for pulling from public ECR
   (public.ecr.aws): AWS's ecr-public.api PrivateLink endpoint only covers the
   ECR Public control-plane API, not the actual image-pull data path
@@ -81,6 +82,23 @@ Resources:
     Properties:
       VpcId: !Ref VpcId
       ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref VpcEndpointsSecurityGroupId
+
+  # Needed for the ECS agent's ssm:GetParameters call resolving the Django
+  # secret key (stacks/07-ecs-alb.yaml's AppTaskDefinition Secrets block) -
+  # without this, that call has no path out of the private subnet and the
+  # task fails to start.
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:

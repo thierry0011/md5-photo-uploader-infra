@@ -97,17 +97,6 @@ Resources:
                   "countNumber": 1
                 },
                 "action": { "type": "expire" }
-              },
-              {
-                "rulePriority": 2,
-                "description": "Keep only the last 10 tagged images",
-                "selection": {
-                  "tagStatus": "tagged",
-                  "tagPrefixList": ["v", "main", "sha-"],
-                  "countType": "imageCountMoreThan",
-                  "countNumber": 10
-                },
-                "action": { "type": "expire" }
               }
             ]
           }
@@ -142,3 +131,14 @@ Outputs:
 
   EcrKmsKeyArn:
     Value: !GetAtt EcrKmsKey.Arn
+    # Exported so 07-ecs-alb.yaml's TaskExecutionRole (inside root.yaml,
+    # a separate stack tree - see this template's Description) can grant
+    # decrypt on it for the Django secret key SSM parameter, which
+    # deliberately reuses this persistent key instead of root.yaml's own
+    # ephemeral AppKmsKey. See that parameter's put-parameter command in
+    # README.md for why: an ephemeral key would make root.yaml's very
+    # first-ever deploy deadlock (ECS task can't resolve the secret before
+    # SecurityStack has even created the key), and a value meant to survive
+    # every teardown needs a key that also survives every teardown.
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-ecr-kms-key-arn

@@ -1,14 +1,25 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - Blue/green deployment pipeline. An EventBridge rule detects
-  new image pushes to ECR and starts CodePipeline, which pulls the deploy
-  files (ecs/taskdef.json, ecs/appspec.yaml) from the application repo and
-  hands off to CodeDeploy for an ECS blue/green traffic shift between the
-  two ALB target groups, through a single production listener (no test
-  listener - see stacks/07-ecs-alb.yaml's Description for why). CodeDeploy
-  still waits for the new (green) task set to pass its target group's own
-  health checks before shifting any production traffic to it, regardless of
-  listener count - that gating is independent of how many listeners exist.
+  Photo Gallery - Blue/green deployment pipeline. The application repo's own
+  CI workflow renders taskdef.json/appspec.yaml (baking in the exact image
+  digest it just pushed to ECR) and uploads them as a zip directly to this
+  stack's S3 artifact bucket, using its own GitHub OIDC role - CodePipeline
+  never talks to GitHub or ECR itself, so it needs no CodeStarConnections
+  handshake and no ECR source action. An EventBridge rule watches for that
+  S3 object being written and starts CodePipeline, which hands the artifact
+  to CodeDeploy for an ECS blue/green traffic shift between the two ALB
+  target groups, through a single production listener (no test listener -
+  see stacks/07-ecs-alb.yaml's Description for why). CodeDeploy still waits
+  for the new (green) task set to pass its target group's own health checks
+  before shifting any production traffic to it, regardless of listener
+  count - that gating is independent of how many listeners exist.
+
+  Triggering off the S3 write (rather than an ECR image push) is
+  deliberate: the CI workflow can only resolve the pushed image's digest
+  *after* the push completes, so the S3 object it then uploads is always
+  the last thing written in that run - it's the one event that's
+  guaranteed to never fire ahead of the deploy artifact it's supposed to
+  describe.
 
 Parameters:
   ProjectName:
@@ -20,18 +31,6 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
 
-  GitHubOrg:
-    Type: String
-    Description: GitHub org/username that owns the application repository.
-
-  GitHubAppRepo:
-    Type: String
-    Description: Application repository name, e.g. "photo-uploader-app".
-
-  GitHubDeployBranch:
-    Type: String
-    Default: main
-
   DeploymentTimeoutMinutes:
     Type: Number
     Default: 15
@@ -41,13 +40,14 @@ Parameters:
     Type: String
     Description: Shared CMK ARN from the security stack.
 
-  EcrRepositoryName:
+  GitHubActionsRoleArn:
     Type: String
-    Description: ECR repository name from the ecr stack.
-
-  EcrRepositoryArn:
-    Type: String
-    Description: ECR repository ARN from the ecr stack.
+    Description: >
+      GitHub Actions role ARN from the github-oidc stack. Granted write
+      access to this stack's S3 artifact bucket (deploy-artifact prefix
+      only) and decrypt/encrypt on AppKmsKeyArn, so the app repo's CI can
+      upload the rendered taskdef.json/appspec.yaml without CodePipeline
+      ever reading from GitHub directly.
 
   AlbFullName:
     Type: String
@@ -90,17 +90,7 @@ Parameters:
     Description: ECS task role ARN from the ecs-alb stack.
 
 Resources:
-  # ---------------- Connection to the application repository ----------------
-  # After creation, open the CodeConnections console once to complete the
-  # GitHub authorization handshake for this connection (one-time, manual,
-  # unavoidable step for any CodeStar/CodeConnections integration).
-  AppRepoConnection:
-    Type: AWS::CodeStarConnections::Connection
-    Properties:
-      ConnectionName: !Sub ${ProjectName}-${Environment}-app-repo
-      ProviderType: GitHub
-
-  # ---------------- Artifact bucket ----------------
+  # ---------------- Artifact bucket (deploy artifact source + pipeline artifact store) ----------------
   PipelineArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -118,6 +108,11 @@ Resources:
             BucketKeyEnabled: true
       VersioningConfiguration:
         Status: Enabled
+      # Lets the EcrPushRule-replacement below (DeployArtifactUploadRule)
+      # react directly to the app repo's S3 upload, with no S3 -> SNS -> SQS
+      # relay needed.
+      NotificationConfiguration:
+        EventBridgeConfiguration: {}
       LifecycleConfiguration:
         Rules:
           - Id: ExpireOldArtifacts
@@ -125,6 +120,43 @@ Resources:
             ExpirationInDays: 30
             NoncurrentVersionExpiration:
               NoncurrentDays: 7
+
+  # Grants the app repo's CI role (from the github-oidc stack) write access
+  # to just the deploy-artifact prefix - CodePipeline's own access to this
+  # bucket is covered separately by CodePipelineServiceRole below.
+  PipelineArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PipelineArtifactBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAppRepoCiUploadDeployArtifact
+            Effect: Allow
+            Principal:
+              AWS: !Ref GitHubActionsRoleArn
+            Action: s3:PutObject
+            Resource: !Sub ${PipelineArtifactBucket.Arn}/source/*
+
+  # S3's default bucket encryption is SSE-KMS, so the uploader (not just
+  # CodePipeline) needs its own identity-based grant on the key - a bucket
+  # policy alone can't grant KMS permissions. IAM::Policy takes a role NAME,
+  # not an ARN, hence the Split/Select against GitHubActionsRoleArn below.
+  GitHubActionsArtifactUploadKmsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${ProjectName}-${Environment}-github-actions-artifact-kms
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EncryptDeployArtifact
+            Effect: Allow
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: !Ref AppKmsKeyArn
+      Roles:
+        - !Select [1, !Split ["/", !Ref GitHubActionsRoleArn]]
 
   # ---------------- CodeDeploy (ECS blue/green) ----------------
   CodeDeployServiceRole:
@@ -254,21 +286,6 @@ Resources:
                   - kms:Decrypt
                   - kms:GenerateDataKey
                 Resource: !Ref AppKmsKeyArn
-              - Sid: UseAppRepoConnection
-                Effect: Allow
-                Action: codestar-connections:UseConnection
-                Resource: !Ref AppRepoConnection
-              - Sid: EcrSourceAction
-                Effect: Allow
-                Action:
-                  - ecr:DescribeImages
-                  - ecr:GetDownloadUrlForLayer
-                  - ecr:BatchGetImage
-                Resource: !Ref EcrRepositoryArn
-              - Sid: EcrAuth
-                Effect: Allow
-                Action: ecr:GetAuthorizationToken
-                Resource: "*"
               - Sid: CodeDeployDrive
                 Effect: Allow
                 Action:
@@ -309,31 +326,21 @@ Resources:
       Stages:
         - Name: Source
           Actions:
-            - Name: AppSource
+            # The app repo's CI workflow already resolved the image digest
+            # and rendered it into taskdef.json before uploading this zip -
+            # CodePipeline just reads it, it never talks to ECR or GitHub.
+            - Name: DeployArtifactSource
               ActionTypeId:
                 Category: Source
                 Owner: AWS
-                Provider: CodeStarSourceConnection
+                Provider: S3
                 Version: "1"
               Configuration:
-                ConnectionArn: !Ref AppRepoConnection
-                FullRepositoryId: !Sub ${GitHubOrg}/${GitHubAppRepo}
-                BranchName: !Ref GitHubDeployBranch
-                DetectChanges: "false"
+                S3Bucket: !Ref PipelineArtifactBucket
+                S3ObjectKey: source/appspec-taskdef.zip
+                PollForSourceChanges: "false"
               OutputArtifacts:
-                - Name: AppSourceOutput
-              RunOrder: 1
-            - Name: ImageSource
-              ActionTypeId:
-                Category: Source
-                Owner: AWS
-                Provider: ECR
-                Version: "1"
-              Configuration:
-                RepositoryName: !Ref EcrRepositoryName
-                ImageTag: latest
-              OutputArtifacts:
-                - Name: ImageSourceOutput
+                - Name: DeployArtifactOutput
               RunOrder: 1
         - Name: Deploy
           Actions:
@@ -344,20 +351,17 @@ Resources:
                 Provider: CodeDeployToECS
                 Version: "1"
               InputArtifacts:
-                - Name: AppSourceOutput
-                - Name: ImageSourceOutput
+                - Name: DeployArtifactOutput
               Configuration:
                 ApplicationName: !Ref CodeDeployApplication
                 DeploymentGroupName: !Ref CodeDeployDeploymentGroup
-                TaskDefinitionTemplateArtifact: AppSourceOutput
-                TaskDefinitionTemplatePath: ecs/taskdef.json
-                AppSpecTemplateArtifact: AppSourceOutput
-                AppSpecTemplatePath: ecs/appspec.yaml
-                Image1ArtifactName: ImageSourceOutput
-                Image1ContainerName: IMAGE1_NAME
+                TaskDefinitionTemplateArtifact: DeployArtifactOutput
+                TaskDefinitionTemplatePath: taskdef.json
+                AppSpecTemplateArtifact: DeployArtifactOutput
+                AppSpecTemplatePath: appspec.yaml
               RunOrder: 1
 
-  # ---------------- EventBridge: ECR push -> start pipeline ----------------
+  # ---------------- EventBridge: deploy artifact upload -> start pipeline ----------------
   EventBridgeInvokePipelineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -378,20 +382,19 @@ Resources:
                 Action: codepipeline:StartPipelineExecution
                 Resource: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${AppPipeline}
 
-  EcrPushRule:
+  DeployArtifactUploadRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub ${ProjectName}-${Environment}-ecr-push-trigger
-      Description: Starts the deployment pipeline whenever a new "latest" image is pushed to ECR.
+      Name: !Sub ${ProjectName}-${Environment}-deploy-artifact-upload
+      Description: Starts the deployment pipeline whenever the app repo's CI uploads a new rendered deploy artifact.
       EventPattern:
-        source: [aws.ecr]
-        detail-type: ["ECR Image Action"]
+        source: [aws.s3]
+        detail-type: ["Object Created"]
         detail:
-          action-type: [PUSH]
-          result: [SUCCESS]
-          repository-name:
-            - !Ref EcrRepositoryName
-          image-tag: [latest]
+          bucket:
+            name: [!Ref PipelineArtifactBucket]
+          object:
+            key: ["source/appspec-taskdef.zip"]
       State: ENABLED
       Targets:
         - Id: StartCodePipeline
@@ -399,12 +402,11 @@ Resources:
           RoleArn: !GetAtt EventBridgeInvokePipelineRole.Arn
 
 Outputs:
-  AppRepoConnectionArn:
-    Value: !Ref AppRepoConnection
-    Description: >
-      Open CodeConnections in the console once and complete the GitHub
-      authorization handshake for this connection before the pipeline can
-      pull source.
+  PipelineArtifactBucketName:
+    Value: !Ref PipelineArtifactBucket
+
+  PipelineArtifactBucketArn:
+    Value: !GetAtt PipelineArtifactBucket.Arn
 
   PipelineName:
     Value: !Ref AppPipeline

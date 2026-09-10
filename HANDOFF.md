@@ -22,8 +22,9 @@ in so future-you doesn't have to re-derive anything from CloudTrail again.
 | Pipeline artifact bucket | `photo-gallery-dev-pipeline-artifacts-711387109786` |
 | Templates bucket (bootstrap) | `photo-gallery-dev-cfn-templates-711387109786` |
 | DB credentials secret | `photo-gallery-dev-db-credentials` |
-| Django secret key secret | `photo-gallery-dev-django-secret-key` |
-| KMS alias | `alias/photo-gallery-dev` |
+| Django secret key (SSM SecureString, hand-created, persistent - never torn down, encrypted with the ECR key below, not the SecurityStack one) | `photo-gallery-dev-django-secret-key` |
+| KMS alias (SecurityStack's shared CMK - ephemeral, torn down every cycle) | `alias/photo-gallery-dev` |
+| KMS alias (ecr.yaml's dedicated CMK - persistent, never torn down) | `alias/photo-gallery-dev-ecr` |
 | RDS instance identifier | `photo-gallery-dev-db` |
 
 All of the above (except the KMS key's actual key ID, which is random) are
@@ -189,6 +190,21 @@ order" for the full explanation) — condensed here as a literal checklist:
    manually, before this step (see README.md's "Bootstrapping the first
    deploy" for the exact `docker pull`/`tag`/`push` commands). If ECR
    already survived from before, skip this - `:latest` is already there.
+4a. **One-time manual step, only needed if you didn't keep the parameter
+   from before**: create the Django secret key SSM parameter, using
+   `ecr.yaml`'s own persistent key rather than `SecurityStack`'s (which
+   doesn't exist yet at this point in the checklist, and is torn down every
+   cycle anyway - see README.md's "Bootstrapping the first deploy" for the
+   full reasoning):
+   ```bash
+   aws ssm put-parameter \
+     --name photo-gallery-dev-django-secret-key \
+     --type SecureString \
+     --key-id alias/photo-gallery-dev-ecr \
+     --value "$(openssl rand -base64 48 | tr -d '\n')"
+   ```
+   Skip this step entirely if the parameter already survived from before
+   (it's never touched by `scripts/teardown.sh`, on purpose).
 5. Push to `main` (or *Actions → Run workflow* on
    `deploy-root-stack.yml`) — packages + deploys `root.yaml` and all 9
    nested stacks in one job run. Expect 15–25 minutes. ECS starts directly

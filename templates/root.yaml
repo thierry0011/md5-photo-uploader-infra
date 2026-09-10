@@ -54,11 +54,6 @@ Parameters:
     Type: String
     Default: 10.20.11.0/24
 
-  EnableNatGateway:
-    Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
-
   # ---- security / ecs-alb shared ----
   ContainerPort:
     Type: Number
@@ -161,10 +156,9 @@ Parameters:
 
   # ---- ecr (persistent, deployed standalone via templates/ecr.yaml - see
   #      that template's Description for why it lives outside this tree) ----
-  EcrRepositoryName:
-    Type: String
-    Description: ECR repository name, output by the standalone templates/ecr.yaml stack.
-
+  # EcrRepositoryName isn't a Parameter here - nothing in this nested-stack
+  # tree needs it since 09-cicd-pipeline.yaml stopped triggering off ECR
+  # push events (it now triggers off its own S3 artifact bucket instead).
   EcrRepositoryArn:
     Type: String
     Description: ECR repository ARN, output by the standalone templates/ecr.yaml stack.
@@ -182,7 +176,6 @@ Resources:
         PublicSubnet2Cidr: !Ref PublicSubnet2Cidr
         PrivateSubnet1Cidr: !Ref PrivateSubnet1Cidr
         PrivateSubnet2Cidr: !Ref PrivateSubnet2Cidr
-        EnableNatGateway: !Ref EnableNatGateway
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-network
@@ -285,7 +278,6 @@ Resources:
         PrivateSubnet2Id: !GetAtt NetworkStack.Outputs.PrivateSubnet2Id
         AlbSecurityGroupId: !GetAtt SecurityStack.Outputs.AlbSecurityGroupId
         EcsSecurityGroupId: !GetAtt SecurityStack.Outputs.EcsSecurityGroupId
-        AppKmsKeyId: !GetAtt SecurityStack.Outputs.AppKmsKeyId
         AppKmsKeyArn: !GetAtt SecurityStack.Outputs.AppKmsKeyArn
         AccessLogsBucketName: !GetAtt StorageCdnStack.Outputs.AccessLogsBucketName
         ImagesBucketName: !GetAtt StorageCdnStack.Outputs.ImagesBucketName
@@ -322,13 +314,9 @@ Resources:
       Parameters:
         ProjectName: !Ref ProjectName
         Environment: !Ref Environment
-        GitHubOrg: !Ref GitHubOrg
-        GitHubAppRepo: !Ref GitHubAppRepo
-        GitHubDeployBranch: !Ref GitHubDeployBranch
         DeploymentTimeoutMinutes: !Ref DeploymentTimeoutMinutes
         AppKmsKeyArn: !GetAtt SecurityStack.Outputs.AppKmsKeyArn
-        EcrRepositoryName: !Ref EcrRepositoryName
-        EcrRepositoryArn: !Ref EcrRepositoryArn
+        GitHubActionsRoleArn: !GetAtt GithubOidcStack.Outputs.GitHubActionsRoleArn
         AlbFullName: !GetAtt EcsAlbStack.Outputs.AlbFullName
         BlueTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.BlueTargetGroupFullName
         GreenTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.GreenTargetGroupFullName
@@ -360,9 +348,8 @@ Outputs:
     Value: !GetAtt GithubOidcStack.Outputs.GitHubActionsRoleArn
     Description: Put this in the app repo's GitHub Actions workflow as the role-to-assume.
 
-  AppRepoConnectionArn:
-    Value: !GetAtt CicdPipelineStack.Outputs.AppRepoConnectionArn
+  PipelineArtifactBucketName:
+    Value: !GetAtt CicdPipelineStack.Outputs.PipelineArtifactBucketName
     Description: >
-      Open CodeConnections in the console once and complete the GitHub
-      authorization handshake for this connection before the pipeline can
-      pull source.
+      The app repo's CI workflow looks this up live and uploads its
+      rendered taskdef.json/appspec.yaml zip to s3://<this bucket>/source/appspec-taskdef.zip.
