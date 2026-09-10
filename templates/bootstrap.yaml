@@ -264,6 +264,11 @@ Resources:
                   - s3:GetBucketAcl
                   - s3:PutBucketTagging
                   - s3:GetBucketTagging
+                  # Required for PipelineArtifactBucket's EventBridgeConfiguration
+                  # (09-cicd-pipeline.yaml) - confirmed missing via AccessDenied
+                  # on s3:PutBucketNotification.
+                  - s3:PutBucketNotification
+                  - s3:GetBucketNotification
                   # CreateBucket with inline Tags checks s3:TagResource, a
                   # distinct, newer action from s3:PutBucketTagging (which
                   # covers a separate PutBucketTagging call after creation)
