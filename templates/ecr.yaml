@@ -1,27 +1,21 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - persistent ECR repository for the Django application image.
-  Deliberately NOT part of root.yaml's nested-stack tree and NOT touched by
-  scripts/teardown.sh: this is the one piece of application state meant to
-  survive a full teardown/respin cycle, so the last working app image never
-  has to be rebuilt or re-pushed after tearing the rest of the lab down.
-  Deployed once via CloudFormation Git sync (like bootstrap.yaml), using
-  InfraDeployRole (from bootstrap.yaml) as its execution role - that role's
-  existing EcrRepository/SecurityKms policy statements already cover
-  everything this template needs (both are scoped by resource-name pattern,
-  not by which template creates the resource), so no new IAM permissions
-  are required to deploy this.
+  Photo Gallery - persistent ECR repository for the Django app image.
+  Deliberately outside root.yaml's nested-stack tree and untouched by
+  scripts/teardown.sh: the one piece of state meant to survive a full
+  teardown/respin, so the last working image never needs rebuilding.
+  Deployed once via Git sync (like bootstrap.yaml) using InfraDeployRole,
+  whose existing EcrRepository/SecurityKms policies already cover this
+  (scoped by resource-name pattern, not by which template creates the
+  resource) - no new IAM needed.
 
-  Uses its own dedicated CMK (EcrKmsKey) rather than the shared AppKmsKey
-  from stacks/01-security.yaml on purpose: that key lives inside
-  SecurityStack, which is destroyed on every teardown, and
-  scripts/teardown.sh now schedules its actual deletion after a grace
-  period. If this repository used that same key, a scheduled key deletion
-  would eventually make every retained image permanently unreadable -
-  exactly backwards for a resource whose entire point is to survive
-  teardown. EcrKmsKey is Retain'd, keeps its own alias forever, and is never
-  touched by teardown.sh or the KMS orphan-cleanup scan (that scan skips
-  anything still aliased, and this key always stays aliased).
+  Uses its own dedicated CMK (EcrKmsKey), not the shared AppKmsKey from
+  stacks/01-security.yaml: that key lives in SecurityStack, which teardown
+  destroys (with a scheduled deletion grace period) - reusing it would
+  eventually make every retained image unreadable, exactly backwards for a
+  resource meant to survive teardown. EcrKmsKey is Retain'd, keeps its
+  alias forever, and is skipped by teardown.sh and the KMS orphan-cleanup
+  scan (which only skips still-aliased keys).
 
 Parameters:
   ProjectName:
