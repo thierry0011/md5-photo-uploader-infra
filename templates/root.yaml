@@ -2,26 +2,18 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - root nested-stack template. Owns all 9 child stacks
   (network, security, vpc-endpoints, storage-cdn, database, github-oidc,
-  ecs-alb, autoscaling, cicd-pipeline) as AWS::CloudFormation::Stack
-  resources, wiring cross-stack values via !GetAtt instead of
-  Fn::Export/Fn::ImportValue. This is a single flat nesting (no intermediate
-  grouping stacks) because the dependency graph crosses too many boundaries
-  for grouping to pay for itself - see 07-ecs-alb below, which pulls from
-  network, security, storage-cdn and database all at once.
-  DEPLOYED BY: .github/workflows/deploy-root-stack.yml, which packages this
-  file to S3 and runs `aws cloudformation deploy` in the same job run - the
-  packaged template is never written into the repo or committed anywhere,
-  it exists only as a local file inside that job. Not Git-sync-deployed.
-  PREREQUISITES: templates/bootstrap.yaml and templates/ecr.yaml must
-  already be deployed - neither is part of this nested-stack tree, neither
-  is ever superseded by it, and ecr.yaml in particular is never torn down
-  by scripts/teardown.sh (its whole purpose is to survive a full
-  teardown/respin cycle - see that template's own Description). This
-  template takes the ECR repository's name/ARN as plain Parameters
-  (EcrRepositoryName/EcrRepositoryArn) rather than a nested-stack
-  cross-reference, sourced from ecr.yaml's outputs once and pasted into
-  deployments/root.yaml - they're stable across respins since the
-  repository name is deterministic.
+  ecs-alb, autoscaling, cicd-pipeline), wiring cross-stack values via
+  !GetAtt. Single flat nesting (no grouping stacks) since the dependency
+  graph crosses too many boundaries for grouping to pay off.
+
+  DEPLOYED BY: .github/workflows/deploy-root-stack.yml (packages to S3 +
+  `cloudformation deploy` in one job, packaged template never committed).
+  Not Git-sync.
+
+  PREREQUISITES: bootstrap.yaml and ecr.yaml must already exist - neither
+  is in this tree. ecr.yaml survives every teardown/respin, so its ARN is
+  passed as a plain Parameter (EcrRepositoryArn), not a nested-stack
+  reference.
 
 Parameters:
   ProjectName:

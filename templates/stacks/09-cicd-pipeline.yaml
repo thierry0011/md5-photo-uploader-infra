@@ -1,25 +1,16 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - Blue/green deployment pipeline. The application repo's own
-  CI workflow renders taskdef.json/appspec.yaml (baking in the exact image
-  digest it just pushed to ECR) and uploads them as a zip directly to this
-  stack's S3 artifact bucket, using its own GitHub OIDC role - CodePipeline
-  never talks to GitHub or ECR itself, so it needs no CodeStarConnections
-  handshake and no ECR source action. An EventBridge rule watches for that
-  S3 object being written and starts CodePipeline, which hands the artifact
-  to CodeDeploy for an ECS blue/green traffic shift between the two ALB
-  target groups, through a single production listener (no test listener -
-  see stacks/07-ecs-alb.yaml's Description for why). CodeDeploy still waits
-  for the new (green) task set to pass its target group's own health checks
-  before shifting any production traffic to it, regardless of listener
-  count - that gating is independent of how many listeners exist.
-
-  Triggering off the S3 write (rather than an ECR image push) is
-  deliberate: the CI workflow can only resolve the pushed image's digest
-  *after* the push completes, so the S3 object it then uploads is always
-  the last thing written in that run - it's the one event that's
-  guaranteed to never fire ahead of the deploy artifact it's supposed to
-  describe.
+  Photo Gallery - Blue/green deployment pipeline. The app repo's own CI
+  renders taskdef.json/appspec.yaml (baking in the exact image digest it
+  just pushed to ECR) and uploads them as a zip to this stack's S3 artifact
+  bucket via its own GitHub OIDC role - CodePipeline never talks to GitHub
+  or ECR. An EventBridge rule fires on that S3 write and starts
+  CodePipeline, which hands the artifact to CodeDeploy for an ECS
+  blue/green shift between the two ALB target groups (single prod listener
+  - see 07-ecs-alb.yaml). Triggering off the S3 write, not the ECR push, is
+  deliberate: the digest can only be resolved after the push completes, so
+  the S3 object is always the last thing written that run - it can never
+  fire ahead of what it describes.
 
 Parameters:
   ProjectName:

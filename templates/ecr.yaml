@@ -1,21 +1,17 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - persistent ECR repository for the Django app image.
-  Deliberately outside root.yaml's nested-stack tree and untouched by
-  scripts/teardown.sh: the one piece of state meant to survive a full
-  teardown/respin, so the last working image never needs rebuilding.
-  Deployed once via Git sync (like bootstrap.yaml) using InfraDeployRole,
-  whose existing EcrRepository/SecurityKms policies already cover this
-  (scoped by resource-name pattern, not by which template creates the
-  resource) - no new IAM needed.
+  Outside root.yaml's nested-stack tree and untouched by teardown.sh: the
+  one piece of state meant to survive a full teardown/respin, so the last
+  working image never needs rebuilding. Deployed once via Git sync using
+  InfraDeployRole (from bootstrap.yaml) - no new IAM needed.
 
   Uses its own dedicated CMK (EcrKmsKey), not the shared AppKmsKey from
-  stacks/01-security.yaml: that key lives in SecurityStack, which teardown
-  destroys (with a scheduled deletion grace period) - reusing it would
-  eventually make every retained image unreadable, exactly backwards for a
-  resource meant to survive teardown. EcrKmsKey is Retain'd, keeps its
-  alias forever, and is skipped by teardown.sh and the KMS orphan-cleanup
-  scan (which only skips still-aliased keys).
+  01-security.yaml: that key lives in SecurityStack, which teardown
+  eventually destroys - reusing it would make every retained image
+  unreadable, backwards for a resource meant to survive teardown.
+  EcrKmsKey is Retain'd and skipped by teardown.sh and the KMS
+  orphan-cleanup scan.
 
 Parameters:
   ProjectName:

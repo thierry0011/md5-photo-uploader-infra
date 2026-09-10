@@ -1,15 +1,13 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - one-time bootstrap prerequisite. NOT part of the
-  nested-stack tree, deployed standalone, first, and never superseded by
-  root.yaml. Creates the S3 bucket that CI packages nested-stack templates
-  into, and InfraDeployRole: a single dual-trust IAM role assumed both by
-  the infra repo's GitHub Actions workflow (via OIDC, to package AND deploy
-  root.yaml directly - no packaged template is ever committed to the repo)
-  and by CloudFormation itself (as the execution role for every resource
-  the nested stacks create). Nothing here depends on the app KMS key, RDS,
-  or any other resource created later - by design, since none of that
-  exists yet when this stack is deployed.
+  Photo Gallery - one-time bootstrap prerequisite. Not part of the
+  nested-stack tree, deployed standalone and first. Creates the S3 bucket
+  CI packages nested-stack templates into, and InfraDeployRole: a
+  dual-trust IAM role assumed both by the infra repo's GitHub Actions
+  workflow (via OIDC, to package and deploy root.yaml) and by
+  CloudFormation itself (as execution role for every nested-stack
+  resource). Depends on nothing created later, by design - none of it
+  exists yet when this stack deploys.
 
 Parameters:
   ProjectName:

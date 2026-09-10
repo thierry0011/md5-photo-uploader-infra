@@ -2,19 +2,16 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - Public ALB with two target groups (blue/green for
   CodeDeploy) behind a single production listener, ECS Fargate cluster,
-  task definition and service. The service's DeploymentController is
-  CODE_DEPLOY: CodeDeploy owns traffic shifting between the two target
-  groups, CloudFormation only owns the initial state.
+  task definition and service. DeploymentController is CODE_DEPLOY:
+  CodeDeploy owns traffic shifting, CloudFormation only owns the initial
+  state.
 
-  Deliberately no second (test) listener: a test listener only adds a
-  pre-cutover manual-poke capability, and it did so by exposing the
-  not-yet-live green fleet on a public port (0.0.0.0/0) before cutover.
-  What actually gates traffic-shifting - both target groups' own health
-  checks, polled continuously regardless of which listener (if any) points
-  at them - stays exactly as rigorous either way, since CodeDeploy already
-  waits for the new task set to pass its target group's health checks
-  before shifting any production traffic to it. See
-  stacks/09-cicd-pipeline.yaml's DeploymentGroup for where that's wired.
+  Deliberately no second (test) listener: it would only add a pre-cutover
+  manual-poke, at the cost of exposing the not-yet-live green fleet
+  publicly before cutover. The real gate - both target groups' own health
+  checks - applies regardless of listener count, since CodeDeploy already
+  waits on them before shifting traffic. See 09-cicd-pipeline.yaml's
+  DeploymentGroup.
 
 Parameters:
   ProjectName:
