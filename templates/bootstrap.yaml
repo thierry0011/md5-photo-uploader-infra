@@ -578,6 +578,11 @@ Resources:
                   - ecr:CompleteLayerUpload
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
+                  # Resolves the digest ':latest' points to right after the
+                  # push, so the rendered taskdef.json pins a fixed image
+                  # regardless of what ':latest' is repointed to later -
+                  # confirmed missing via AccessDenied on ecr:DescribeImages.
+                  - ecr:DescribeImages
                 Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-${Environment}-app
               # Read-only - lets the app repo's workflow look up the CURRENT
               # CloudFront domain, DB endpoint, and secret ARNs at build
