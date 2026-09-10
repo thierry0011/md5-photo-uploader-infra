@@ -15,12 +15,6 @@ parameters:
   DBMultiAZ: "true"
   DBDeletionProtection: "false"
   DBBackupRetentionDays: "7"
-  GitHubOrg: "thierry0011"
-  GitHubAppRepo: "md5-photo-uploader-app"
-  GitHubDeployBranch: "main"
-  # bootstrap.yaml already created the account's OIDC provider - this stack
-  # must not try to create a second one.
-  CreateOidcProvider: "false"
   TaskCpu: "512"
   TaskMemory: "1024"
   # Own persistent repo (templates/ecr.yaml), not the public httpd
@@ -39,6 +33,9 @@ parameters:
   # nothing in the nested-stack tree needs it since 09-cicd-pipeline.yaml
   # triggers off its own S3 artifact bucket instead of ECR pushes.)
   EcrRepositoryArn: "arn:aws:ecr:us-east-1:711387109786:repository/photo-gallery-dev-app"
+  # Output by the standalone templates/bootstrap.yaml stack. Deterministic
+  # name, stable across every respin - see bootstrap.yaml's Description.
+  GitHubActionsRoleArn: "arn:aws:iam::711387109786:role/photo-gallery-dev-github-actions-ecr-push"
 tags:
   Project: photo-gallery
   Environment: dev

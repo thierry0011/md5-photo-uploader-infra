@@ -26,11 +26,12 @@ Parameters:
   GitHubActionsRoleArn:
     Type: String
     Description: >
-      ARN of the GitHub Actions OIDC push role created by
-      stacks/06-github-oidc.yaml (photo-gallery-<env>-github-actions-ecr-push).
-      Passed as a literal value here rather than a cross-stack reference:
-      that role's name is deterministic, so its ARN is stable across every
-      root.yaml respin.
+      ARN of the GitHub Actions OIDC push role created by bootstrap.yaml
+      (photo-gallery-<env>-github-actions-ecr-push). Passed as a literal
+      value here rather than a cross-stack reference: that role's name is
+      deterministic, so its ARN is stable across every respin - and this
+      role must exist before this stack can deploy regardless, since ECR
+      validates its RepositoryPolicyText's Principal at deploy time.
 
 Resources:
   # ---------------- Dedicated CMK (never shared with the ephemeral tree) ----------------

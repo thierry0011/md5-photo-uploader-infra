@@ -11,7 +11,7 @@ in so future-you doesn't have to re-derive anything from CloudTrail again.
 |---|---|
 | AWS account | `711387109786` |
 | Region | `us-east-1` |
-| Root stack | `photo-gallery-dev-root` (9 nested stacks under it) |
+| Root stack | `photo-gallery-dev-root` (8 nested stacks under it) |
 | Bootstrap stack (Git sync) | `md5-PhotoUploaderLab` |
 | ECR stack (Git sync, persistent - never torn down) | deployed from `templates/ecr.yaml` / `deployments/ecr.yaml` |
 | GitHub org | `thierry0011` |
@@ -54,7 +54,7 @@ This does, in order:
    lives in the standalone, persistent `ecr.yaml` stack, which this script
    never touches at all - see "ECR stack - never touch this" below.)
 2. `aws cloudformation delete-stack` on `photo-gallery-dev-root`, then
-   waits for `DELETE_COMPLETE`. CloudFormation cascades all 9 nested
+   waits for `DELETE_COMPLETE`. CloudFormation cascades all 8 nested
    stacks itself, in the correct dependency order — this is the "not
    manual" part; no per-resource deletion, no `full_sweep.py`-style
    orphan hunting.
@@ -156,13 +156,13 @@ If you do want it gone too (it's Git-sync-managed, so there's no plain
    is also `Retain` — empty (it's not versioned, so a plain
    `aws s3 rm s3://<bucket> --recursive` is enough) and
    `aws s3api delete-bucket` it if you want it fully gone.
-4. The GitHub OIDC provider (`token.actions.githubusercontent.com`) that
-   `bootstrap.yaml` created is **not** deleted by deleting this stack's
-   *nested* consumers, but it **is** an actual resource this stack itself
-   owns — deleting `md5-PhotoUploaderLab` removes it too. If you ever
-   respin without bootstrap re-creating it, root's `GithubOidcStack` would
-   need `CreateOidcProvider: "true"` again (it's currently `"false"`
-   because bootstrap owns it).
+4. The GitHub OIDC provider (`token.actions.githubusercontent.com`) *and*
+   `GitHubActionsEcrPushRole` (the app repo's CI role) both live here too
+   now — deleting `md5-PhotoUploaderLab` removes both. This is also why
+   `ecr.yaml` can never be deployed before `bootstrap.yaml`: it needs
+   `GitHubActionsEcrPushRole` to already exist (see README.md's stack
+   table). If you ever respin bootstrap fresh, set `CreateOidcProvider`
+   back to `"true"` in `deployments/bootstrap.yaml` first.
 
 ## Spinning back up later
 
@@ -206,25 +206,23 @@ order" for the full explanation) — condensed here as a literal checklist:
    Skip this step entirely if the parameter already survived from before
    (it's never touched by `scripts/teardown.sh`, on purpose).
 5. Push to `main` (or *Actions → Run workflow* on
-   `deploy-root-stack.yml`) — packages + deploys `root.yaml` and all 9
+   `deploy-root-stack.yml`) — packages + deploys `root.yaml` and all 8
    nested stacks in one job run. Expect 15–25 minutes. ECS starts directly
    on whatever `:latest` was at deploy time - no NAT Gateway needed for
    this pull, since it comes from your own repo through the existing VPC
    endpoints.
-6. **One-time manual step, unavoidable**: authorize the CodeStar
-   connection. Console → *Developer Tools → Connections* → find the
-   connection named after `md5-photo-uploader-app` → *Update pending
-   connection* → complete the GitHub OAuth handshake. Nothing in
-   `CicdPipelineStack` can proceed without this.
-7. Put the root stack's `GitHubActionsRoleArn` output into the **app
+6. Put `bootstrap.yaml`'s `GitHubActionsRoleArn` output into the **app
    repo's** `build-and-push.yml` if it changed (it's a plain `env:` value
-   there now, not a secret — only update the committed file if the ARN
-   is different from last time, e.g. after a full bootstrap re-creation).
-   Push the app repo to `main` — this builds the real image, pushes to
-   ECR, and the resulting EventBridge → CodePipeline → CodeDeploy chain
-   replaces whatever image was running with the actual Django app
-   automatically.
-8. Verify: `aws cloudformation describe-stacks --stack-name
+   there, not a secret — only update the committed file if the ARN is
+   different from last time, e.g. after a full bootstrap re-creation - it
+   normally won't be, since bootstrap is meant to survive). Push the app
+   repo to `main` — this builds the real image, pushes to ECR, renders and
+   uploads the deploy artifact to the pipeline's S3 bucket, and the
+   resulting EventBridge → CodePipeline → CodeDeploy chain replaces
+   whatever image was running with the actual Django app automatically. No
+   CodeStar/CodeConnections handshake needed anymore - the pipeline's
+   source is that S3 upload, not a GitHub connection.
+7. Verify: `aws cloudformation describe-stacks --stack-name
    photo-gallery-dev-root --query "Stacks[0].Outputs"` for the ALB DNS
    name and CloudFront domain, then load the gallery in a browser.
 

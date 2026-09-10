@@ -2,12 +2,14 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - one-time bootstrap prerequisite. Not part of the
   nested-stack tree, deployed standalone and first. Creates the S3 bucket
-  CI packages nested-stack templates into, and InfraDeployRole: a
-  dual-trust IAM role assumed both by the infra repo's GitHub Actions
-  workflow (via OIDC, to package and deploy root.yaml) and by
-  CloudFormation itself (as execution role for every nested-stack
-  resource). Depends on nothing created later, by design - none of it
-  exists yet when this stack deploys.
+  CI packages nested-stack templates into, InfraDeployRole (assumed by the
+  infra repo's GitHub Actions workflow via OIDC, and by CloudFormation
+  itself as execution role for every nested-stack resource), and
+  GitHubActionsEcrPushRole for the app repo's CI. The push role lives here
+  rather than in root.yaml's nested tree specifically so ecr.yaml (which
+  needs it to already exist) is never stuck waiting on root.yaml, which in
+  turn needs ecr.yaml's KMS key export - a real circular dependency
+  otherwise. Depends on nothing created later, by design.
 
 Parameters:
   ProjectName:
@@ -27,6 +29,11 @@ Parameters:
     Type: String
     Default: md5-photo-uploader-infra
     Description: Name of this infrastructure repository.
+
+  GitHubAppRepo:
+    Type: String
+    Default: md5-photo-uploader-app
+    Description: Name of the application repository (a separate repo from this one).
 
   GitHubDeployBranch:
     Type: String
@@ -354,7 +361,7 @@ Resources:
                   - ecr:ListTagsForResource
                 Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-*
 
-              # ---- IAM roles created by the nested stacks (06, 07, 08, 09) ----
+              # ---- IAM roles created by the nested stacks (07, 08, 09) ----
               - Sid: IamRolesForStacks
                 Effect: Allow
                 Action:
@@ -522,6 +529,78 @@ Resources:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-github-actions-cfn-deploy
 
+  # Lives here (not in root.yaml's nested tree, where it used to be as
+  # stacks/06-github-oidc.yaml) specifically so ecr.yaml - which needs this
+  # role to already exist, since ECR validates RepositoryPolicyText's
+  # Principal at deploy time - never has to wait on root.yaml. See this
+  # template's own Description for the circular dependency this avoids.
+  GitHubActionsEcrPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${Environment}-github-actions-ecr-push
+      Description: Assumed by the app repo's GitHub Actions workflow via OIDC to build and push the app image to ECR.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubDeployBranch}
+                  - !Sub repo:${GitHubOrg}@*/${GitHubAppRepo}@*:ref:refs/heads/${GitHubDeployBranch}
+      MaxSessionDuration: 3600
+      Policies:
+        - PolicyName: EcrPushAndAuth
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPushToAppRepo
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-${Environment}-app
+              # Read-only - lets the app repo's workflow look up the CURRENT
+              # CloudFront domain, DB endpoint, and secret ARNs at build
+              # time instead of relying on GitHub Secrets that go stale the
+              # moment those resources are ever recreated (new random
+              # suffixes). No GetSecretValue - only enough to resolve an
+              # ARN by its stable, deterministic name.
+              - Sid: LookUpLiveInfraValues
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackResource
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${Environment}-*/*
+              - Sid: LookUpSecretArns
+                Effect: Allow
+                Action: secretsmanager:DescribeSecret
+                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-${Environment}-*
+              # Same read-only ARN lookup as above, for the Django secret key
+              # now that it lives in Parameter Store instead of Secrets
+              # Manager - no WithDecryption, so no kms:Decrypt needed either.
+              - Sid: LookUpSsmParameterArns
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-*
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-github-actions-role
+
 Outputs:
   TemplatesBucketName:
     Value: !Ref TemplatesBucket
@@ -532,3 +611,11 @@ Outputs:
     Description: >
       Put this in .github/workflows/*.yml as the role-to-assume, and pass it
       to `aws cloudformation deploy --role-arn` too.
+
+  GitHubActionsRoleArn:
+    Value: !GetAtt GitHubActionsEcrPushRole.Arn
+    Description: >
+      Put this in the app repo's GitHub Actions workflow as the
+      role-to-assume, and paste it as a literal parameter value into
+      deployments/root.yaml and deployments/ecr.yaml (deterministic name,
+      stable across every respin).

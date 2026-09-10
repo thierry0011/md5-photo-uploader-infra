@@ -250,11 +250,14 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-
                 Action: ssm:GetParameters
                 Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-django-secret-key
+              # ecr.yaml is a hard prerequisite for root.yaml now (its
+              # GitHubActionsRoleArn moved to bootstrap.yaml specifically to
+              # break the circular dependency this Fn::ImportValue used to
+              # create - see root.yaml's Description) - deploy ecr.yaml
+              # before root.yaml, always.
               - Effect: Allow
-
                 Action: kms:Decrypt
                 Resource: !ImportValue
                   Fn::Sub: ${ProjectName}-${Environment}-ecr-kms-key-arn

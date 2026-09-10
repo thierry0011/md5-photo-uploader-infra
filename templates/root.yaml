@@ -1,19 +1,22 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - root nested-stack template. Owns all 9 child stacks
-  (network, security, vpc-endpoints, storage-cdn, database, github-oidc,
-  ecs-alb, autoscaling, cicd-pipeline), wiring cross-stack values via
-  !GetAtt. Single flat nesting (no grouping stacks) since the dependency
-  graph crosses too many boundaries for grouping to pay off.
+  Photo Gallery - root nested-stack template. Owns 8 child stacks (network,
+  security, vpc-endpoints, storage-cdn, database, ecs-alb, autoscaling,
+  cicd-pipeline), wiring cross-stack values via !GetAtt. Single flat
+  nesting (no grouping stacks) since the dependency graph crosses too many
+  boundaries for grouping to pay off.
 
   DEPLOYED BY: .github/workflows/deploy-root-stack.yml (packages to S3 +
   `cloudformation deploy` in one job, packaged template never committed).
   Not Git-sync.
 
-  PREREQUISITES: bootstrap.yaml and ecr.yaml must already exist - neither
-  is in this tree. ecr.yaml survives every teardown/respin, so its ARN is
-  passed as a plain Parameter (EcrRepositoryArn), not a nested-stack
-  reference.
+  PREREQUISITES: bootstrap.yaml, then ecr.yaml, must already exist -
+  neither is in this tree. Both survive every teardown/respin, so their
+  ARNs (EcrRepositoryArn, GitHubActionsRoleArn) are plain Parameters, not
+  nested-stack references. The GitHub Actions role moved from this tree
+  into bootstrap.yaml to break a real circular dependency: ecr.yaml needs
+  that role to exist first, and EcsAlbStack here needs ecr.yaml's KMS
+  export.
 
 Parameters:
   ProjectName:
@@ -83,28 +86,6 @@ Parameters:
     Type: Number
     Default: 7
 
-  # ---- github-oidc / cicd-pipeline shared ----
-  GitHubOrg:
-    Type: String
-    Description: GitHub org or username that owns the application repo.
-
-  GitHubAppRepo:
-    Type: String
-    Default: md5-photo-uploader-app
-
-  GitHubDeployBranch:
-    Type: String
-    Default: main
-
-  CreateOidcProvider:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: >
-      Set to "false" if bootstrap.yaml already created the
-      token.actions.githubusercontent.com OIDC provider in this account
-      (an account can only have one).
-
   # ---- ecs-alb ----
   TaskCpu:
     Type: String
@@ -154,6 +135,14 @@ Parameters:
   EcrRepositoryArn:
     Type: String
     Description: ECR repository ARN, output by the standalone templates/ecr.yaml stack.
+
+  # ---- github actions role (persistent, created by templates/bootstrap.yaml
+  #      - see that template's Description for why it lives outside this tree) ----
+  GitHubActionsRoleArn:
+    Type: String
+    Description: >
+      GitHub Actions ECR-push role ARN, output by the standalone
+      templates/bootstrap.yaml stack.
 
 Resources:
   NetworkStack:
@@ -236,21 +225,6 @@ Resources:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-database
 
-  GithubOidcStack:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: ./stacks/06-github-oidc.yaml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        Environment: !Ref Environment
-        GitHubOrg: !Ref GitHubOrg
-        GitHubAppRepo: !Ref GitHubAppRepo
-        GitHubDeployBranch: !Ref GitHubDeployBranch
-        CreateOidcProvider: !Ref CreateOidcProvider
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-${Environment}-github-oidc
-
   EcsAlbStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -308,7 +282,7 @@ Resources:
         Environment: !Ref Environment
         DeploymentTimeoutMinutes: !Ref DeploymentTimeoutMinutes
         AppKmsKeyArn: !GetAtt SecurityStack.Outputs.AppKmsKeyArn
-        GitHubActionsRoleArn: !GetAtt GithubOidcStack.Outputs.GitHubActionsRoleArn
+        GitHubActionsRoleArn: !Ref GitHubActionsRoleArn
         AlbFullName: !GetAtt EcsAlbStack.Outputs.AlbFullName
         BlueTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.BlueTargetGroupFullName
         GreenTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.GreenTargetGroupFullName
@@ -337,8 +311,10 @@ Outputs:
       the standalone templates/ecr.yaml stack, not here.
 
   GitHubActionsRoleArn:
-    Value: !GetAtt GithubOidcStack.Outputs.GitHubActionsRoleArn
-    Description: Put this in the app repo's GitHub Actions workflow as the role-to-assume.
+    Value: !Ref GitHubActionsRoleArn
+    Description: >
+      Same value passed in as a parameter - the role itself lives in the
+      standalone templates/bootstrap.yaml stack, not here.
 
   PipelineArtifactBucketName:
     Value: !GetAtt CicdPipelineStack.Outputs.PipelineArtifactBucketName
