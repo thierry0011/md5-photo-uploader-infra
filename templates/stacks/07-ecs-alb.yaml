@@ -317,12 +317,6 @@ Resources:
         - Name: app
           Image: !Ref ContainerImage
           Essential: true
-          Command:
-            - "httpd-foreground"
-            - "-C"
-            - !Sub "Listen ${ContainerPort}"
-            - "-C"
-            - "Alias /health/ /usr/local/apache2/htdocs/index.html"
           PortMappings:
             - ContainerPort: !Ref ContainerPort
               Protocol: tcp
