@@ -33,9 +33,8 @@ parameters:
   # nothing in the nested-stack tree needs it since 09-cicd-pipeline.yaml
   # triggers off its own S3 artifact bucket instead of ECR pushes.)
   EcrRepositoryArn: "arn:aws:ecr:us-east-1:711387109786:repository/photo-gallery-dev-app"
-  # Output by the standalone templates/bootstrap.yaml stack. Deterministic
-  # name, stable across every respin - see bootstrap.yaml's Description.
-  GitHubActionsRoleArn: "arn:aws:iam::711387109786:role/photo-gallery-dev-github-actions-ecr-push"
+  # GitHubActionsRoleArn is no longer a parameter here - root.yaml resolves
+  # it via Fn::ImportValue against ecr.yaml's export directly.
 tags:
   Project: photo-gallery
   Environment: dev

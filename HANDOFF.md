@@ -156,13 +156,14 @@ If you do want it gone too (it's Git-sync-managed, so there's no plain
    is also `Retain` — empty (it's not versioned, so a plain
    `aws s3 rm s3://<bucket> --recursive` is enough) and
    `aws s3api delete-bucket` it if you want it fully gone.
-4. The GitHub OIDC provider (`token.actions.githubusercontent.com`) *and*
-   `GitHubActionsEcrPushRole` (the app repo's CI role) both live here too
-   now — deleting `md5-PhotoUploaderLab` removes both. This is also why
-   `ecr.yaml` can never be deployed before `bootstrap.yaml`: it needs
-   `GitHubActionsEcrPushRole` to already exist (see README.md's stack
-   table). If you ever respin bootstrap fresh, set `CreateOidcProvider`
-   back to `"true"` in `deployments/bootstrap.yaml` first.
+4. The GitHub OIDC provider (`token.actions.githubusercontent.com`) lives
+   here — deleting `md5-PhotoUploaderLab` removes it. `GitHubActionsEcrPushRole`
+   (the app repo's CI role) lives in `ecr.yaml` instead, not here (see
+   README.md's stack table) - but `ecr.yaml` still can't deploy before
+   `bootstrap.yaml`: its role's trust policy needs the OIDC provider to
+   already exist, and it still uses `InfraDeployRole` as its execution role.
+   If you ever respin bootstrap fresh, set `CreateOidcProvider` back to
+   `"true"` in `deployments/bootstrap.yaml` first.
 
 ## Spinning back up later
 
@@ -175,10 +176,12 @@ order" for the full explanation) — condensed here as a literal checklist:
    One-time hand-created execution role (nothing exists yet to create it
    for you), scoped to what `bootstrap.yaml` itself creates.
 2. **ECR** (skip entirely — this is the persistent one, it should already
-   exist and still hold your last working image). Only redo this if you
-   deliberately tore *it* down too: Console → *Create stack* → *Sync from
-   Git* → deployment file `deployments/ecr.yaml`, using `InfraDeployRole`
-   from step 1 as the execution role.
+   exist and still hold your last working image, plus `GitHubActionsEcrPushRole`).
+   Only redo this if you deliberately tore *it* down too: Console → *Create
+   stack* → *Sync from Git* → deployment file `deployments/ecr.yaml`, using
+   `InfraDeployRole` from step 1 as the execution role. Fill in `GitHubOrg`
+   (and `GitHubAppRepo` if not `md5-photo-uploader-app`) - this template
+   creates the push role itself now, no ARN passed in from bootstrap.
 3. From bootstrap's outputs, set the infra repo's GitHub Actions secrets:
    `AWS_ROLE_ARN` ← `InfraDeployRoleArn`, `TEMPLATES_BUCKET` ←
    `TemplatesBucketName`. (Skip if these secrets are already set from
@@ -211,17 +214,17 @@ order" for the full explanation) — condensed here as a literal checklist:
    on whatever `:latest` was at deploy time - no NAT Gateway needed for
    this pull, since it comes from your own repo through the existing VPC
    endpoints.
-6. Put `bootstrap.yaml`'s `GitHubActionsRoleArn` output into the **app
-   repo's** `build-and-push.yml` if it changed (it's a plain `env:` value
-   there, not a secret — only update the committed file if the ARN is
-   different from last time, e.g. after a full bootstrap re-creation - it
-   normally won't be, since bootstrap is meant to survive). Push the app
-   repo to `main` — this builds the real image, pushes to ECR, renders and
-   uploads the deploy artifact to the pipeline's S3 bucket, and the
-   resulting EventBridge → CodePipeline → CodeDeploy chain replaces
-   whatever image was running with the actual Django app automatically. No
-   CodeStar/CodeConnections handshake needed anymore - the pipeline's
-   source is that S3 upload, not a GitHub connection.
+6. In the **app repo's** GitHub Secrets, check `AWS_ROLE_ARN` (← `ecr.yaml`'s
+   `GitHubActionsRoleArn` output), `TASK_EXECUTION_ROLE_ARN` and
+   `TASK_ROLE_ARN` (← `EcsAlbStack`'s outputs) are still current - only
+   update them if `ecr.yaml` or `EcsAlbStack` were actually re-created (role
+   names are deterministic, so a normal respin of `root.yaml` alone doesn't
+   change these). Push the app repo to `main` — this builds the real image,
+   pushes to ECR, renders and uploads the deploy artifact to the pipeline's
+   S3 bucket, and the resulting EventBridge → CodePipeline → CodeDeploy
+   chain replaces whatever image was running with the actual Django app
+   automatically. No CodeStar/CodeConnections handshake needed anymore -
+   the pipeline's source is that S3 upload, not a GitHub connection.
 7. Verify: `aws cloudformation describe-stacks --stack-name
    photo-gallery-dev-root --query "Stacks[0].Outputs"` for the ALB DNS
    name and CloudFront domain, then load the gallery in a browser.

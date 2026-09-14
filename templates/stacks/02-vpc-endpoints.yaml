@@ -88,10 +88,7 @@ Resources:
       SecurityGroupIds:
         - !Ref VpcEndpointsSecurityGroupId
 
-  # Needed for the ECS agent's ssm:GetParameters call resolving the Django
-  # secret key (stacks/07-ecs-alb.yaml's AppTaskDefinition Secrets block) -
-  # without this, that call has no path out of the private subnet and the
-  # task fails to start.
+  # Needed for the ECS agent to resolve the Django secret key via ssm:GetParameters from the private subnet
   SsmEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:

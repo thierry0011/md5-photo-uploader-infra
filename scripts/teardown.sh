@@ -1,33 +1,9 @@
 #!/usr/bin/env bash
-# Tears down the photo-gallery-dev root stack cleanly through CloudFormation
-# (a single delete-stack call cascades all 9 nested stacks, in the right
-# order, automatically - no manual per-resource deletion), then purges the
-# handful of resources that deliberately survive stack deletion because of
-# their DeletionPolicy (Retain/Snapshot - see each template). Re-run-safe:
-# every step checks whether there's anything left to do before acting.
+# Deletes the root stack (cascades all 9 nested stacks) then purges the Retain/Snapshot resources CFN leaves behind. Re-run-safe.
 #
-# Does NOT touch bootstrap.yaml's stack (md5-PhotoUploaderLab) or
-# templates/ecr.yaml's stack - both are CloudFormation Git-sync-managed
-# (no CLI-scriptable delete path) and, for ecr.yaml, deliberately meant to
-# survive every teardown/respin cycle on purpose (see that template's
-# Description). See HANDOFF.md for the console steps to remove either, and
-# for why you'd want to leave them in place most of the time anyway.
+# Does NOT touch bootstrap.yaml's or templates/ecr.yaml's stacks - both are Git-sync-managed and meant to survive teardown.
 #
-# Usage:
-#   AWS_PROFILE=admin ./teardown.sh [--yes] [--delete-snapshot] [--schedule-key-deletion-days=N]
-#
-#   --yes                            Skip the "type the stack name" confirmation.
-#   --delete-snapshot                Also delete the final RDS snapshot CFN
-#                                    creates on DBInstance deletion. Default:
-#                                    leave it - it's the only way to restore
-#                                    this lab's data later.
-#   --schedule-key-deletion-days=N   Schedule the retained KMS key for
-#                                    deletion after N days (7-30). Default:
-#                                    leave the key pending-retention forever;
-#                                    only the alias is removed (so a respin
-#                                    can reuse the alias name immediately -
-#                                    a respin's new key doesn't need this
-#                                    one gone, only the alias free).
+# Usage: AWS_PROFILE=admin ./teardown.sh [--yes] [--delete-snapshot] [--schedule-key-deletion-days=N]
 set -euo pipefail
 
 REGION="us-east-1"
@@ -87,21 +63,11 @@ empty_bucket_all_versions() {
 }
 
 # --- 1. Empty the pipeline artifact bucket -------------------------------
-# No DeletionPolicy on this one (defaults to Delete) but it's versioned and
-# CodePipeline writes to it continuously on every deploy. A non-empty
-# versioned bucket makes CicdPipelineStack - and so the whole root stack -
-# fail deletion, which is exactly the "stuck stack" pattern from earlier.
-# Emptying it up front avoids that entirely.
+# Versioned and non-empty would make CicdPipelineStack (and the root stack) fail deletion
 echo "==> Emptying $PIPELINE_ARTIFACT_BUCKET so stack deletion doesn't stall on it..."
 empty_bucket_all_versions "$PIPELINE_ARTIFACT_BUCKET"
 
-# NOTE: there used to be a step here that emptied the ECR repository before
-# deleting the stack. Not anymore, on purpose - the repository now lives in
-# templates/ecr.yaml, a standalone Git-sync stack outside this tree, so
-# root's deletion never touches it and there's nothing here to empty. Do
-# NOT reintroduce an "empty the ECR repo" step: that would defeat the whole
-# point of pulling it out (keeping the last working image across a
-# teardown/respin cycle).
+# No ECR-emptying step here on purpose: the repo now lives in standalone templates/ecr.yaml and must survive teardown
 
 # --- 2. Delete the root stack (cascades all 9 nested stacks) -------------
 echo "==> Deleting stack $ROOT_STACK ..."
@@ -125,14 +91,7 @@ echo "==> Root stack deleted."
 # --- 3. Clean up the resources it deliberately left behind ---------------
 echo "==> Cleaning up retained resources..."
 
-# 3a. Secrets Manager - force-delete (no recovery window) so a respin can
-#     recreate a secret with the same name immediately, instead of hitting
-#     "already scheduled for deletion". Does NOT include the Django secret
-#     key: that's a manually-created SSM SecureString parameter now (see
-#     07-ecs-alb.yaml's TaskExecutionRole), never owned by CloudFormation,
-#     so root-stack deletion never touches it in the first place - same
-#     "survives every teardown/respin on purpose" treatment as ecr.yaml's
-#     repository.
+# 3a. Secrets Manager - force-delete so a respin can reuse the name; Django secret key is a separate SSM param, untouched here
 for secret in "$DB_SECRET"; do
   if aws secretsmanager describe-secret --secret-id "$secret" >/dev/null 2>&1; then
     aws secretsmanager delete-secret --secret-id "$secret" --force-delete-without-recovery >/dev/null
@@ -142,10 +101,7 @@ for secret in "$DB_SECRET"; do
   fi
 done
 
-# 3b. S3 buckets (versioned, Retain) - empty every version + delete marker,
-#     then delete the bucket itself. Bucket names are deterministic (no
-#     random suffix), so leaving these behind would block a respin's
-#     StorageCdnStack from creating a bucket with the same name.
+# 3b. S3 buckets - empty and delete; deterministic names mean leftovers would block a respin's StorageCdnStack
 for bucket in "$IMAGES_BUCKET" "$ACCESS_LOGS_BUCKET"; do
   if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
     empty_bucket_all_versions "$bucket"
@@ -156,19 +112,7 @@ for bucket in "$IMAGES_BUCKET" "$ACCESS_LOGS_BUCKET"; do
   fi
 done
 
-# 3c. KMS - AppKmsKeyAlias has no DeletionPolicy of its own (only AppKmsKey
-#     does), so CloudFormation already deletes the alias itself as a normal
-#     part of root-stack deletion, well before this script ever runs. That
-#     means looking the key up *through* the alias (the old approach here)
-#     always finds nothing and silently skips scheduling deletion - the
-#     underlying Retain'd key it should have found stays pending forever
-#     regardless of --schedule-key-deletion-days. Instead, scan every KMS
-#     key in the account for this project's Description tag and schedule
-#     deletion on any of them that currently have zero aliases pointing at
-#     them - a key still under any alias is still in active use somewhere
-#     (e.g. a not-yet-cleaned-up orphaned nested stack) and must be left
-#     alone. This also sweeps up any keys orphaned by earlier teardown runs,
-#     not just the one from this run.
+# 3c. KMS - the alias is already gone by the time this runs, so scan all keys by description and schedule deletion on alias-less ones
 echo "    scanning for orphaned KMS keys tagged for ${PROJECT}-${ENV}..."
 ALIASED_KEY_IDS=" $(aws kms list-aliases --query 'Aliases[?TargetKeyId!=`null`].TargetKeyId' --output text) "
 FOUND_ORPHAN=false
@@ -193,12 +137,7 @@ for KEY_ID in $(aws kms list-keys --query 'Keys[].KeyId' --output text); do
 done
 [ "$FOUND_ORPHAN" = true ] || echo "    no alias-less orphaned keys found for ${PROJECT}-${ENV}"
 
-# 3d. RDS final snapshot - CloudFormation names it automatically when
-#     DBInstance is deleted under a Snapshot policy, using the nested
-#     stack's own logical/physical IDs (e.g.
-#     "photo-gallery-dev-root-databasestack-<id>-snapshot-dbinstance-<id>"),
-#     not a name you can predict from ProjectName/Environment alone -
-#     match loosely by substring instead of assuming a prefix.
+# 3d. RDS final snapshot - CFN names it unpredictably, so match loosely by substring instead of an assumed prefix
 SNAPSHOT=$(aws rds describe-db-snapshots \
   --query "DBSnapshots[?contains(DBSnapshotIdentifier, \`${PROJECT}-${ENV}\`)].DBSnapshotIdentifier" \
   --output text)

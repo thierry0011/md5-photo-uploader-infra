@@ -245,18 +245,15 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref DBCredentialsSecretArn
-        - PolicyName: ReadDjangoSecretKeyParameter
+        - PolicyName: ReadSsmParameters
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # Covers the Django secret key plus the CloudFront domain and DB endpoint SSM params the app's taskdef.json also reads
               - Effect: Allow
                 Action: ssm:GetParameters
-                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-django-secret-key
-              # ecr.yaml is a hard prerequisite for root.yaml now (its
-              # GitHubActionsRoleArn moved to bootstrap.yaml specifically to
-              # break the circular dependency this Fn::ImportValue used to
-              # create - see root.yaml's Description) - deploy ecr.yaml
-              # before root.yaml, always.
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-*
+              # ecr.yaml must deploy before root.yaml - this ImportValue would otherwise be a circular dependency
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: !ImportValue
@@ -343,7 +340,7 @@ Resources:
             - Name: DJANGO_SECRET_KEY
               # SecureString in Parameter Store, created once by hand
 
-              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-django-secret-key
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-django-secret-key
           LogConfiguration:
             LogDriver: awslogs
             Options:

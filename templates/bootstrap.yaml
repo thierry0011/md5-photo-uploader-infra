@@ -2,14 +2,18 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - one-time bootstrap prerequisite. Not part of the
   nested-stack tree, deployed standalone and first. Creates the S3 bucket
-  CI packages nested-stack templates into, InfraDeployRole (assumed by the
-  infra repo's GitHub Actions workflow via OIDC, and by CloudFormation
-  itself as execution role for every nested-stack resource), and
-  GitHubActionsEcrPushRole for the app repo's CI. The push role lives here
-  rather than in root.yaml's nested tree specifically so ecr.yaml (which
-  needs it to already exist) is never stuck waiting on root.yaml, which in
-  turn needs ecr.yaml's KMS key export - a real circular dependency
-  otherwise. Depends on nothing created later, by design.
+  CI packages nested-stack templates into, and InfraDeployRole (assumed by
+  the infra repo's GitHub Actions workflow via OIDC, and by CloudFormation
+  itself as execution role for every nested-stack resource). Depends on
+  nothing created later, by design.
+
+  GitHubActionsEcrPushRole (the app repo's CI push role) now lives in
+  templates/ecr.yaml instead of here - it's only ever used by that
+  template's RepositoryPolicyText, and defining it in the same template
+  lets CloudFormation resolve the intra-stack dependency itself instead of
+  requiring a pasted-literal Parameter between two separately-deployed
+  stacks (see ecr.yaml's Description for the circular-dependency reasoning
+  that keeps it out of root.yaml specifically).
 
 Parameters:
   ProjectName:
@@ -29,11 +33,6 @@ Parameters:
     Type: String
     Default: md5-photo-uploader-infra
     Description: Name of this infrastructure repository.
-
-  GitHubAppRepo:
-    Type: String
-    Default: md5-photo-uploader-app
-    Description: Name of the application repository (a separate repo from this one).
 
   GitHubDeployBranch:
     Type: String
@@ -84,7 +83,6 @@ Resources:
         - 6938fd4d98bab03faadb97b34396831e3780aea1
         - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
 
-  # Dual-trust: GitHub Actions (OIDC) assumes this to run `cloudformation
   InfraDeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -99,7 +97,7 @@ Resources:
           - Sid: GitHubActionsOidc
             Effect: Allow
             Principal:
-              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
@@ -122,7 +120,7 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              # ---- Packaging: upload/read child templates in S3 ----
+              # Packaging: upload/read child templates in S3
               - Sid: TemplatesBucketAccess
                 Effect: Allow
                 Action:
@@ -134,9 +132,7 @@ Resources:
                 Action: s3:ListBucket
                 Resource: !GetAtt TemplatesBucket.Arn
 
-              # ---- CloudFormation: the root stack + its 9 nested children
-              #      (nested stack physical names are always prefixed with
-              #      the parent's, so one wildcard covers both) ----
+              # CloudFormation: root stack + its 9 nested children (one wildcard covers both via name prefixing)
               - Sid: CloudFormationStackOperations
                 Effect: Allow
                 Action:
@@ -155,11 +151,9 @@ Resources:
                   - cloudformation:GetTemplateSummary
                   - cloudformation:ValidateTemplate
                 Resource:
-                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${Environment}-*/*
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${Environment}-*/*
 
-              # ---- 00-network.yaml: EC2 networking. Most of these actions
-              #      don't support resource-level ARNs (AWS limitation, not
-              #      a scoping choice), hence Resource: "*" ----
+              # 00-network.yaml: EC2 networking; most actions lack resource-level ARNs, hence Resource: "*"
               - Sid: NetworkEc2
                 Effect: Allow
                 Action:
@@ -195,11 +189,7 @@ Resources:
                   - ec2:DescribeTags
                 Resource: "*"
 
-              # ---- 01-security.yaml's shared CMK, AND templates/ecr.yaml's
-              #      dedicated EcrKmsKey (deployed standalone via Git sync,
-              #      using this same role as its execution role) - both
-              #      covered by this one Resource: "*" statement, no
-              #      per-key scoping needed ----
+              # Covers both 01-security.yaml's CMK and ecr.yaml's EcrKmsKey (same role), no per-key scoping needed
               - Sid: SecurityKms
                 Effect: Allow
                 Action:
@@ -217,11 +207,7 @@ Resources:
                   - kms:DeleteAlias
                   - kms:UpdateAlias
                   - kms:ListAliases
-                  # Required for OTHER services (ECR, RDS, CloudWatch Logs,
-                  # Secrets Manager, S3) to actually use this customer
-                  # managed key, not just for describing/managing the key
-                  # resource itself - confirmed missing via a KmsException
-                  # on ECR CreateRepository (kms:CreateGrant).
+                  # Also needed by other services to use this key (e.g. kms:CreateGrant for ECR), not just to manage it
                   - kms:CreateGrant
                   - kms:RevokeGrant
                   - kms:ListGrants
@@ -244,7 +230,7 @@ Resources:
                   - ec2:RevokeSecurityGroupEgress
                 Resource: "*"
 
-              # ---- 03-storage-cdn.yaml: S3 image/logs buckets + CloudFront ----
+              # 03-storage-cdn.yaml: S3 image/logs buckets + CloudFront
               - Sid: StorageCdnBuckets
                 Effect: Allow
                 Action:
@@ -264,21 +250,16 @@ Resources:
                   - s3:GetBucketAcl
                   - s3:PutBucketTagging
                   - s3:GetBucketTagging
-                  # Required for PipelineArtifactBucket's EventBridgeConfiguration
-                  # (09-cicd-pipeline.yaml) - confirmed missing via AccessDenied
-                  # on s3:PutBucketNotification.
+                  # Needed for PipelineArtifactBucket's EventBridgeConfiguration in 09-cicd-pipeline.yaml
                   - s3:PutBucketNotification
                   - s3:GetBucketNotification
-                  # CreateBucket with inline Tags checks s3:TagResource, a
-                  # distinct, newer action from s3:PutBucketTagging (which
-                  # covers a separate PutBucketTagging call after creation)
-                  # - confirmed missing via CloudTrail AccessDenied.
+                  # CreateBucket with inline Tags checks s3:TagResource, distinct from s3:PutBucketTagging
                   - s3:TagResource
                   - s3:UntagResource
                   - s3:ListTagsForResource
                   - s3:GetBucketLocation
                   - s3:ListBucket
-                Resource: !Sub arn:${AWS::Partition}:s3:::${ProjectName}-*
+                Resource: !Sub arn:aws:s3:::${ProjectName}-*
               - Sid: CloudFrontDistribution
                 Effect: Allow
                 Action:
@@ -298,7 +279,7 @@ Resources:
                   - cloudfront:UpdateResponseHeadersPolicy
                 Resource: "*"
 
-              # ---- 04-database.yaml: RDS + Secrets Manager ----
+              # 04-database.yaml: RDS + Secrets Manager
               - Sid: DatabaseRds
                 Effect: Allow
                 Action:
@@ -312,11 +293,7 @@ Resources:
                   - rds:AddTagsToResource
                   - rds:RemoveTagsFromResource
                   - rds:ListTagsForResource
-                  # DBInstance has DeletionPolicy: Snapshot - deleting it (on
-                  # stack deletion/rollback) requires taking a final
-                  # snapshot first. Confirmed missing via a DELETE_FAILED on
-                  # DBInstance: "not authorized to perform:
-                  # rds:CreateDBSnapshot".
+                  # DBInstance's DeletionPolicy: Snapshot requires rds:CreateDBSnapshot on delete/rollback
                   - rds:CreateDBSnapshot
                   - rds:DescribeDBSnapshots
                 Resource: "*"
@@ -331,24 +308,25 @@ Resources:
                   - secretsmanager:UpdateSecret
                   - secretsmanager:TagResource
                   - secretsmanager:UntagResource
-                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-*
-              # GetRandomPassword (used by GenerateSecretString on this
-              # stack's DBCredentialsSecret) isn't a resource-level action -
-              # IAM requires Resource: "*" for it. The Django secret key no
-              # longer lives here - it's a hand-created SSM SecureString
-              # parameter now (see 07-ecs-alb.yaml's TaskExecutionRole and
-              # README.md's "Bootstrapping the first deploy"), so this role
-              # never needs to touch it.
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-*
+              # GetRandomPassword isn't resource-level, needs "*"; Django secret key is a separate hand-created SSM param
               - Sid: SecretsManagerGetRandomPassword
                 Effect: Allow
                 Action: secretsmanager:GetRandomPassword
                 Resource: "*"
 
-              # ---- templates/ecr.yaml: ECR repo + its policy. Deployed
-              #      standalone via Git sync (like this stack), not as a
-              #      nested nested stack under root.yaml - this Sid is
-              #      scoped by resource-name pattern, not by which template
-              #      creates the repository, so it already covers it ----
+              # 03-storage-cdn.yaml / 04-database.yaml: SSM params publishing CloudFront domain and DB endpoint for the ECS task
+              - Sid: SsmParametersForApp
+                Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:GetParameters
+                  - ssm:AddTagsToResource
+                  - ssm:RemoveTagsFromResource
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-*
+
+              # templates/ecr.yaml's ECR repo, deployed standalone; scoped by name pattern so it's covered too
               - Sid: EcrRepository
                 Effect: Allow
                 Action:
@@ -364,9 +342,9 @@ Resources:
                   - ecr:TagResource
                   - ecr:UntagResource
                   - ecr:ListTagsForResource
-                Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-*
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-*
 
-              # ---- IAM roles created by the nested stacks (07, 08, 09) ----
+              # IAM roles created by the nested stacks (07, 08, 09)
               - Sid: IamRolesForStacks
                 Effect: Allow
                 Action:
@@ -383,24 +361,16 @@ Resources:
                   - iam:DetachRolePolicy
                   - iam:TagRole
                   - iam:UntagRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-*
-              # PassRole granted separately, per consuming service, scoped by
-              # iam:PassedToService rather than a blanket '*' - covers
-              # TaskExecutionRole/TaskRole (07), ScalingRole (08),
-              # CodePipelineServiceRole/CodeDeployServiceRole/
-              # EventBridgeInvokePipelineRole (09).
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-*
+              # PassRole scoped by iam:PassedToService per consuming service, not a blanket "*"
               - Sid: PassRolesToServices
                 Effect: Allow
                 Action: iam:PassRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-*
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-*
                 Condition:
                   StringEquals:
                     iam:PassedToService:
-                      # cloudformation.amazonaws.com: this role passing
-                      # itself, required for `aws cloudformation deploy
-                      # --role-arn` (CreateChangeSet needs iam:PassRole on
-                      # whatever --role-arn names, even when it's the same
-                      # role as the caller).
+                      # cloudformation.amazonaws.com: role passes itself, needed for deploy --role-arn
                       - cloudformation.amazonaws.com
                       - ecs-tasks.amazonaws.com
                       - application-autoscaling.amazonaws.com
@@ -408,7 +378,7 @@ Resources:
                       - codedeploy.amazonaws.com
                       - events.amazonaws.com
 
-              # ---- 07-ecs-alb.yaml: ALB, ECS, CloudWatch Logs ----
+              # 07-ecs-alb.yaml: ALB, ECS, CloudWatch Logs
               - Sid: EcsAlb
                 Effect: Allow
                 Action:
@@ -423,10 +393,7 @@ Resources:
                   - elasticloadbalancing:ModifyTargetGroup
                   - elasticloadbalancing:ModifyTargetGroupAttributes
                   - elasticloadbalancing:DescribeTargetGroupAttributes
-                  # Needed to resolve !GetAtt TargetGroup.TargetGroupFullName
-                  # (used in this template's Outputs and 09-cicd-pipeline's
-                  # CloudWatch alarm dimensions) - confirmed missing via a
-                  # CREATE_FAILED on EcsAlbStack.
+                  # Needed to resolve !GetAtt TargetGroup.TargetGroupFullName, used in Outputs and 09's alarm dimensions
                   - elasticloadbalancing:DescribeTargetHealth
                   - elasticloadbalancing:CreateListener
                   - elasticloadbalancing:DeleteListener
@@ -459,9 +426,9 @@ Resources:
                   - logs:AssociateKmsKey
                   - logs:TagResource
                   - logs:TagLogGroup
-                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${ProjectName}-*
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${ProjectName}-*
 
-              # ---- 08-autoscaling.yaml: Application Auto Scaling ----
+              # 08-autoscaling.yaml: Application Auto Scaling
               - Sid: Autoscaling
                 Effect: Allow
                 Action:
@@ -472,30 +439,25 @@ Resources:
                   - application-autoscaling:DeleteScalingPolicy
                   - application-autoscaling:DescribeScalingPolicies
                 Resource: "*"
-              # First ScalableTarget in the account auto-creates this
-              # service-linked role.
+              # First ScalableTarget in the account auto-creates this service-linked role
               - Sid: EcsAutoscalingServiceLinkedRole
                 Effect: Allow
                 Action: iam:CreateServiceLinkedRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
                 Condition:
                   StringEquals:
                     iam:AWSServiceName: ecs.application-autoscaling.amazonaws.com
 
-              # 07-ecs-alb.yaml: the first ECS service in the account/region
-              # integrated with a load balancer auto-creates this
-              # service-linked role too (separate from the autoscaling one
-              # above).
+              # 07-ecs-alb.yaml: first load-balanced ECS service auto-creates this service-linked role too
               - Sid: EcsServiceLinkedRole
                 Effect: Allow
                 Action: iam:CreateServiceLinkedRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS
                 Condition:
                   StringEquals:
                     iam:AWSServiceName: ecs.amazonaws.com
 
-              # ---- 09-cicd-pipeline.yaml: CodeStar Connections, CodePipeline,
-              #      CodeDeploy, EventBridge, CloudWatch alarms ----
+              # 09-cicd-pipeline.yaml: CodeStar Connections, CodePipeline, CodeDeploy, EventBridge, CloudWatch alarms
               - Sid: CicdPipeline
                 Effect: Allow
                 Action:
@@ -503,9 +465,7 @@ Resources:
                   - codestar-connections:DeleteConnection
                   - codestar-connections:GetConnection
                   - codestar-connections:TagResource
-                  # Same shape as iam:PassRole - required to hand the
-                  # connection to CodePipeline for it to use. Confirmed
-                  # missing via a CREATE_FAILED on AppPipeline.
+                  # Same shape as iam:PassRole - required to hand the connection to CodePipeline
                   - codestar-connections:PassConnection
                   - codepipeline:CreatePipeline
                   - codepipeline:DeletePipeline
@@ -534,83 +494,6 @@ Resources:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-github-actions-cfn-deploy
 
-  # Lives here (not in root.yaml's nested tree, where it used to be as
-  # stacks/06-github-oidc.yaml) specifically so ecr.yaml - which needs this
-  # role to already exist, since ECR validates RepositoryPolicyText's
-  # Principal at deploy time - never has to wait on root.yaml. See this
-  # template's own Description for the circular dependency this avoids.
-  GitHubActionsEcrPushRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${ProjectName}-${Environment}-github-actions-ecr-push
-      Description: Assumed by the app repo's GitHub Actions workflow via OIDC to build and push the app image to ECR.
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                token.actions.githubusercontent.com:sub:
-                  - !Sub repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubDeployBranch}
-                  - !Sub repo:${GitHubOrg}@*/${GitHubAppRepo}@*:ref:refs/heads/${GitHubDeployBranch}
-      MaxSessionDuration: 3600
-      Policies:
-        - PolicyName: EcrPushAndAuth
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: EcrAuth
-                Effect: Allow
-                Action: ecr:GetAuthorizationToken
-                Resource: "*"
-              - Sid: EcrPushToAppRepo
-                Effect: Allow
-                Action:
-                  - ecr:BatchCheckLayerAvailability
-                  - ecr:PutImage
-                  - ecr:InitiateLayerUpload
-                  - ecr:UploadLayerPart
-                  - ecr:CompleteLayerUpload
-                  - ecr:BatchGetImage
-                  - ecr:GetDownloadUrlForLayer
-                  # Resolves the digest ':latest' points to right after the
-                  # push, so the rendered taskdef.json pins a fixed image
-                  # regardless of what ':latest' is repointed to later -
-                  # confirmed missing via AccessDenied on ecr:DescribeImages.
-                  - ecr:DescribeImages
-                Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-${Environment}-app
-              # Read-only - lets the app repo's workflow look up the CURRENT
-              # CloudFront domain, DB endpoint, and secret ARNs at build
-              # time instead of relying on GitHub Secrets that go stale the
-              # moment those resources are ever recreated (new random
-              # suffixes). No GetSecretValue - only enough to resolve an
-              # ARN by its stable, deterministic name.
-              - Sid: LookUpLiveInfraValues
-                Effect: Allow
-                Action:
-                  - cloudformation:DescribeStacks
-                  - cloudformation:DescribeStackResource
-                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${Environment}-*/*
-              - Sid: LookUpSecretArns
-                Effect: Allow
-                Action: secretsmanager:DescribeSecret
-                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-${Environment}-*
-              # Same read-only ARN lookup as above, for the Django secret key
-              # now that it lives in Parameter Store instead of Secrets
-              # Manager - no WithDecryption, so no kms:Decrypt needed either.
-              - Sid: LookUpSsmParameterArns
-                Effect: Allow
-                Action: ssm:GetParameter
-                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}-${Environment}-*
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-${Environment}-github-actions-role
-
 Outputs:
   TemplatesBucketName:
     Value: !Ref TemplatesBucket
@@ -621,11 +504,3 @@ Outputs:
     Description: >
       Put this in .github/workflows/*.yml as the role-to-assume, and pass it
       to `aws cloudformation deploy --role-arn` too.
-
-  GitHubActionsRoleArn:
-    Value: !GetAtt GitHubActionsEcrPushRole.Arn
-    Description: >
-      Put this in the app repo's GitHub Actions workflow as the
-      role-to-assume, and paste it as a literal parameter value into
-      deployments/root.yaml and deployments/ecr.yaml (deterministic name,
-      stable across every respin).

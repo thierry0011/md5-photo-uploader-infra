@@ -41,7 +41,7 @@ Resources:
           - Sid: RootAccountFullAccess
             Effect: Allow
             Principal:
-              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
             Action: "kms:*"
             Resource: "*"
           - Sid: AllowCloudWatchLogsUse
@@ -56,11 +56,7 @@ Resources:
               - kms:Describe*
             Resource: "*"
           - Sid: AllowCloudFrontDecryptForOAC
-            # CloudFront (fetching S3 objects via OAC) must be able to decrypt
-            # SSE-KMS objects. Scoped by source account rather than the
-            # distribution ARN so this key (created before the CloudFront
-            # distribution, in a different nested stack) has no circular
-            # dependency.
+            # Scoped by source account, not distribution ARN, to avoid a circular dependency (key predates the distribution)
             Effect: Allow
             Principal:
               Service: cloudfront.amazonaws.com

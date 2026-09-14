@@ -135,6 +135,15 @@ Resources:
       TargetId: !Ref DBInstance
       TargetType: AWS::RDS::DBInstance
 
+  # Stable parameter name the app repo reads, since the RDS endpoint changes whenever the instance is recreated
+  DBEndpointAddressParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub ${ProjectName}-${Environment}-db-endpoint-address
+      Type: String
+      Value: !GetAtt DBInstance.Endpoint.Address
+      Description: RDS endpoint address, read by the app repo's ECS task at container launch.
+
 Outputs:
   DBInstanceEndpointAddress:
     Value: !GetAtt DBInstance.Endpoint.Address

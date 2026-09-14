@@ -1,6 +1,11 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - persistent ECR repository for the Django app image.
+  Photo Gallery - persistent ECR repository for the Django app image, plus
+  GitHubActionsEcrPushRole (the app repo's CI push role - lives here, not
+  in bootstrap.yaml, because it's only ever used by this template's
+  RepositoryPolicyText; defining both in the same template lets
+  CloudFormation resolve the dependency intra-stack instead of requiring a
+  pasted-literal Parameter between two separately-deployed stacks).
   Outside root.yaml's nested-stack tree and untouched by teardown.sh: the
   one piece of state meant to survive a full teardown/respin, so the last
   working image never needs rebuilding. Deployed once via Git sync using
@@ -23,18 +28,22 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
 
-  GitHubActionsRoleArn:
+  GitHubOrg:
     Type: String
-    Description: >
-      ARN of the GitHub Actions OIDC push role created by bootstrap.yaml
-      (photo-gallery-<env>-github-actions-ecr-push). Passed as a literal
-      value here rather than a cross-stack reference: that role's name is
-      deterministic, so its ARN is stable across every respin - and this
-      role must exist before this stack can deploy regardless, since ECR
-      validates its RepositoryPolicyText's Principal at deploy time.
+    Description: GitHub org or username that owns the app repo, e.g. "my-org".
+
+  GitHubAppRepo:
+    Type: String
+    Default: md5-photo-uploader-app
+    Description: Name of the application repository (a separate repo from the infra one).
+
+  GitHubDeployBranch:
+    Type: String
+    Default: main
+    Description: Branch allowed to assume the push role.
 
 Resources:
-  # ---------------- Dedicated CMK (never shared with the ephemeral tree) ----------------
+  # Dedicated CMK (never shared with the ephemeral tree)
   EcrKmsKey:
     Type: AWS::KMS::Key
     DeletionPolicy: Retain
@@ -48,7 +57,7 @@ Resources:
           - Sid: RootAccountFullAccess
             Effect: Allow
             Principal:
-              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
             Action: "kms:*"
             Resource: "*"
       Tags:
@@ -61,7 +70,54 @@ Resources:
       AliasName: !Sub alias/${ProjectName}-${Environment}-ecr
       TargetKeyId: !Ref EcrKmsKey
 
-  # ---------------- ECR repository (Retain - the actual point of this stack) ----------------
+  # GitHub Actions push role (co-located with the repo it's scoped to)
+  GitHubActionsEcrPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${Environment}-github-actions-ecr-push
+      Description: Assumed by the app repo's GitHub Actions workflow via OIDC to build and push the app image to ECR.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubDeployBranch}
+                  - !Sub repo:${GitHubOrg}@*/${GitHubAppRepo}@*:ref:refs/heads/${GitHubDeployBranch}
+      MaxSessionDuration: 3600
+      Policies:
+        - PolicyName: EcrPushAndAuth
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPushToAppRepo
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  # Resolves the digest ':latest' points to so taskdef.json can pin a fixed image
+                  - ecr:DescribeImages
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-${Environment}-app
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-github-actions-role
+
+  # ECR repository (Retain - the actual point of this stack)
   AppRepository:
     Type: AWS::ECR::Repository
     DeletionPolicy: Retain
@@ -97,7 +153,7 @@ Resources:
           - Sid: AllowGitHubActionsPush
             Effect: Allow
             Principal:
-              AWS: !Ref GitHubActionsRoleArn
+              AWS: !GetAtt GitHubActionsEcrPushRole.Arn
             Action:
               - ecr:BatchCheckLayerAvailability
               - ecr:PutImage
@@ -111,6 +167,15 @@ Resources:
           Value: !Sub ${ProjectName}-${Environment}-app-repo
 
 Outputs:
+  GitHubActionsRoleArn:
+    Value: !GetAtt GitHubActionsEcrPushRole.Arn
+    Description: >
+      Put this in the app repo's GitHub Actions workflow as the
+      role-to-assume (GitHub Secret). Also exported for root.yaml's
+      09-cicd-pipeline.yaml to Fn::ImportValue instead of a pasted literal.
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-github-actions-role-arn
+
   RepositoryName:
     Value: !Ref AppRepository
 
@@ -122,14 +187,6 @@ Outputs:
 
   EcrKmsKeyArn:
     Value: !GetAtt EcrKmsKey.Arn
-    # Exported so 07-ecs-alb.yaml's TaskExecutionRole (inside root.yaml,
-    # a separate stack tree - see this template's Description) can grant
-    # decrypt on it for the Django secret key SSM parameter, which
-    # deliberately reuses this persistent key instead of root.yaml's own
-    # ephemeral AppKmsKey. See that parameter's put-parameter command in
-    # README.md for why: an ephemeral key would make root.yaml's very
-    # first-ever deploy deadlock (ECS task can't resolve the secret before
-    # SecurityStack has even created the key), and a value meant to survive
-    # every teardown needs a key that also survives every teardown.
+    # Exported for 07-ecs-alb.yaml's TaskExecutionRole to decrypt the Django secret SSM param, reusing this persistent key instead of an ephemeral one (avoids a first-deploy deadlock)
     Export:
       Name: !Sub ${ProjectName}-${Environment}-ecr-kms-key-arn

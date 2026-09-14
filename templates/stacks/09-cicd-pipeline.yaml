@@ -99,9 +99,7 @@ Resources:
             BucketKeyEnabled: true
       VersioningConfiguration:
         Status: Enabled
-      # Lets the EcrPushRule-replacement below (DeployArtifactUploadRule)
-      # react directly to the app repo's S3 upload, with no S3 -> SNS -> SQS
-      # relay needed.
+      # Lets DeployArtifactUploadRule react directly to the S3 upload, no SNS/SQS relay needed
       NotificationConfiguration:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
@@ -113,9 +111,7 @@ Resources:
             NoncurrentVersionExpiration:
               NoncurrentDays: 7
 
-  # Grants the app repo's CI role (from the github-oidc stack) write access
-  # to just the deploy-artifact prefix - CodePipeline's own access to this
-  # bucket is covered separately by CodePipelineServiceRole below.
+  # Grants the app repo's CI role write access to just the deploy-artifact prefix
   PipelineArtifactBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -130,10 +126,7 @@ Resources:
             Action: s3:PutObject
             Resource: !Sub ${PipelineArtifactBucket.Arn}/source/*
 
-  # S3's default bucket encryption is SSE-KMS, so the uploader (not just
-  # CodePipeline) needs its own identity-based grant on the key - a bucket
-  # policy alone can't grant KMS permissions. IAM::Policy takes a role NAME,
-  # not an ARN, hence the Split/Select against GitHubActionsRoleArn below.
+  # The uploader needs its own KMS grant too (a bucket policy can't grant it); IAM::Policy needs a role name, hence Split/Select
   GitHubActionsArtifactUploadKmsPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -318,9 +311,7 @@ Resources:
       Stages:
         - Name: Source
           Actions:
-            # The app repo's CI workflow already resolved the image digest
-            # and rendered it into taskdef.json before uploading this zip -
-            # CodePipeline just reads it, it never talks to ECR or GitHub.
+            # The app repo's CI already rendered taskdef.json with the resolved digest; CodePipeline just reads it
             - Name: DeployArtifactSource
               ActionTypeId:
                 Category: Source
@@ -372,7 +363,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: codepipeline:StartPipelineExecution
-                Resource: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${AppPipeline}
+                Resource: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${AppPipeline}
 
   DeployArtifactUploadRule:
     Type: AWS::Events::Rule
@@ -390,7 +381,7 @@ Resources:
       State: ENABLED
       Targets:
         - Id: StartCodePipeline
-          Arn: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${AppPipeline}
+          Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${AppPipeline}
           RoleArn: !GetAtt EventBridgeInvokePipelineRole.Arn
 
 Outputs:

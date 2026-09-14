@@ -93,8 +93,8 @@ job finishes. There is no generated file to accidentally hand-edit.
 
 | Stack | Template | Creates | Depends on (via `!GetAtt`) |
 |---|---|---|---|
-| — | `bootstrap.yaml` (standalone, **not nested**) | S3 bucket for packaged templates, `InfraDeployRole` (dual-trust: GitHub OIDC for this repo's deploy workflow + `cloudformation.amazonaws.com` as root's execution role), `GitHubActionsEcrPushRole` (OIDC role the **app repo's** CI assumes to push images to ECR and upload deploy artifacts) | — |
-| — | `ecr.yaml` (standalone, **not nested**, survives teardown) | ECR repository for the app image, its own dedicated KMS CMK, repo policy trusting the GitHub Actions role | `bootstrap.yaml`'s `GitHubActionsRoleArn` (passed as a literal parameter value, not `!GetAtt` — see below) |
+| — | `bootstrap.yaml` (standalone, **not nested**) | S3 bucket for packaged templates, `InfraDeployRole` (dual-trust: GitHub OIDC for this repo's deploy workflow + `cloudformation.amazonaws.com` as root's execution role) | — |
+| — | `ecr.yaml` (standalone, **not nested**, survives teardown) | ECR repository for the app image, its own dedicated KMS CMK, `GitHubActionsEcrPushRole` (OIDC role the **app repo's** CI assumes to push images to ECR and upload deploy artifacts) and the repo policy trusting it | — (role is defined in this same template, no cross-stack reference needed) |
 | `NetworkStack` | `stacks/00-network.yaml` | VPC, public/private subnets (2 AZ), routing, S3 gateway endpoint | — |
 | `SecurityStack` | `stacks/01-security.yaml` | Security groups, shared KMS CMK | Network |
 | `VpcEndpointsStack` | `stacks/02-vpc-endpoints.yaml` | Interface endpoints: ECR api/dkr, CloudWatch Logs, Secrets Manager | Network, Security |
@@ -102,14 +102,17 @@ job finishes. There is no generated file to accidentally hand-edit.
 | `DatabaseStack` | `stacks/04-database.yaml` | RDS PostgreSQL, Secrets Manager credentials | Network, Security |
 | `EcsAlbStack` | `stacks/07-ecs-alb.yaml` | ALB (2 target groups, 1 listener), ECS cluster/service/task def | Network, Security, StorageCdn, Database, plus `ecr.yaml`'s `EcrKmsKeyArn` export (`Fn::ImportValue`, to decrypt the Django secret key parameter) |
 | `AutoscalingStack` | `stacks/08-autoscaling.yaml` | Application Auto Scaling (1–4 tasks, CPU target tracking) | EcsAlb |
-| `CicdPipelineStack` | `stacks/09-cicd-pipeline.yaml` | S3 artifact bucket, CodePipeline, CodeDeploy blue/green, EventBridge trigger (fires on the app repo's S3 artifact upload, not an ECR push) | Security, EcsAlb, plus `bootstrap.yaml`'s `GitHubActionsRoleArn` (granted write access to the artifact bucket) |
+| `CicdPipelineStack` | `stacks/09-cicd-pipeline.yaml` | S3 artifact bucket, CodePipeline, CodeDeploy blue/green, EventBridge trigger (fires on the app repo's S3 artifact upload, not an ECR push) | Security, EcsAlb, plus `ecr.yaml`'s `GitHubActionsRoleArn` export (`Fn::ImportValue`, granted write access to the artifact bucket) |
 
-`ecr.yaml`'s repository policy needs the GitHub Actions role's ARN, and
-that role lives in `bootstrap.yaml` — not in this nested tree — precisely
-so `ecr.yaml` never has to wait on `root.yaml`. `root.yaml`'s `EcsAlbStack`
-separately needs `ecr.yaml`'s KMS key export, so creating the role inside
-`root.yaml` would make the two stacks depend on each other. Deploy order is
-strictly `bootstrap.yaml` → `ecr.yaml` → `root.yaml`, always.
+The GitHub Actions push role lives in `ecr.yaml` — not in this nested tree,
+and not in `bootstrap.yaml` either — because it's only ever used by that
+template's own `RepositoryPolicyText`; defining it there lets CloudFormation
+resolve the dependency intra-stack (no cross-stack reference, no pasted
+literal) while still keeping it out of `root.yaml`, which is the thing that
+actually matters: `root.yaml`'s `EcsAlbStack` needs `ecr.yaml`'s KMS key
+export, so if the role lived in `root.yaml` instead, `ecr.yaml` (which needs
+the role to exist first) and `root.yaml` would depend on each other. Deploy
+order is strictly `bootstrap.yaml` → `ecr.yaml` → `root.yaml`, always.
 
 ## Three-phase deploy lifecycle
 
@@ -122,11 +125,14 @@ never supersedes, absorbs, or manages it.
 
 **Phase 2 — the ECR repository (one-time, standalone, deploy once and leave
 running).** `templates/ecr.yaml` / `deployments/ecr.yaml`, also deployed via
-Git sync using `InfraDeployRole` as its execution role. Unlike everything in
-Phase 3, this is never torn down between respins — it's the one piece of
-application state deliberately meant to survive a full teardown, so the
-last working app image is still there the next time you spin the lab back
-up. See that template's Description for why it uses its own dedicated CMK.
+Git sync using `InfraDeployRole` as its execution role. Creates the ECR
+repository, its own dedicated CMK, and `GitHubActionsEcrPushRole` (the app
+repo's CI push role — co-located here since it's only ever granted access in
+this template's own repository policy). Unlike everything in Phase 3, this
+is never torn down between respins — it's the one piece of application
+state deliberately meant to survive a full teardown, so the last working
+app image is still there the next time you spin the lab back up. See that
+template's Description for why it uses its own dedicated CMK.
 
 **Phase 3 — the nested stack (ongoing, fully disposable).** Push a change to
 `templates/root.yaml`, `templates/stacks/**`, or `deployments/root.yaml` →
@@ -183,12 +189,12 @@ this cannot be scripted or done via CloudFormation itself.
    itself creates (S3 bucket + IAM roles/OIDC provider).
 2. **Deploy `ecr.yaml`** via Git sync the same way, deployment file
    `deployments/ecr.yaml`, using `InfraDeployRole` (from step 1) as its
-   execution role — no new role needed, its existing ECR/KMS permissions
-   already cover this. `GitHubActionsRoleArn` comes straight from
-   `bootstrap.yaml`'s own output — step 1 already created that role, so
-   there's no deterministic-ARN guessing needed here, it genuinely exists
-   by this point. Do this **once** — never delete this stack as part of a
-   normal teardown/respin.
+   execution role — no new role needed, its existing ECR/KMS/IAM permissions
+   already cover this. Fill in `GitHubOrg` (and `GitHubAppRepo` if it's not
+   `md5-photo-uploader-app`) first — this template now creates
+   `GitHubActionsEcrPushRole` itself, so it needs those directly rather than
+   an ARN passed in from `bootstrap.yaml`. Do this **once** — never delete
+   this stack as part of a normal teardown/respin.
 
    With `ecr.yaml` deployed, do the two other one-time manual steps now,
    before moving on - both only need this stack, not `root.yaml` (see
@@ -203,14 +209,19 @@ this cannot be scripted or done via CloudFormation itself.
    `EcrRepositoryArn` into `deployments/root.yaml`.
 4. Push to `main` (or run `deploy-root-stack.yml` manually via
    *Actions → Run workflow*) — this packages and deploys the root stack plus
-   its 8 nested children in one run. `GitHubOrg` / `GitHubAppRepo` /
-   `GitHubDeployBranch` only live in `deployments/bootstrap.yaml` now (step
-   1) — `deployments/root.yaml` doesn't take them anymore.
-5. Put `bootstrap.yaml`'s `GitHubActionsRoleArn` output into the app repo's
-   `.github/workflows/build-and-push.yml` as `AWS_ROLE_ARN` (it's a plain
-   `env:` value there, not a secret).
+   its 8 nested children in one run. `GitHubActionsRoleArn` is no longer a
+   parameter anywhere in this tree — `root.yaml` resolves it via
+   `Fn::ImportValue` against `ecr.yaml`'s export directly.
+5. In the **app repo's** GitHub Settings → Secrets and variables → Actions,
+   add three **repository secrets**: `AWS_ROLE_ARN` ← `ecr.yaml`'s
+   `GitHubActionsRoleArn` output, `TASK_EXECUTION_ROLE_ARN` and
+   `TASK_ROLE_ARN` ← `EcsAlbStack`'s outputs of the same name (visible under
+   `root.yaml`'s nested stack resources). These used to be plain `env:`
+   values / live CloudFormation lookups in the app repo's workflow; they're
+   secrets now so the workflow doesn't carry account-specific ARNs in
+   committed YAML.
 
-On any later respin, only steps 4–6 repeat — `bootstrap.yaml` and
+On any later respin, only steps 4–5 repeat — `bootstrap.yaml` and
 `ecr.yaml` are both one-time, standalone, and untouched by
 `scripts/teardown.sh`.
 
@@ -270,7 +281,7 @@ key with it. `EcrKmsKey` sidesteps this entirely: it exists before
 `root.yaml` is ever deployed, same as the image seed above, and
 `TaskExecutionRole` in `stacks/07-ecs-alb.yaml` is granted `kms:Decrypt` on
 it via a cross-stack `Fn::ImportValue` (see `ecr.yaml`'s `EcrKmsKeyArn`
-output and that role's `ReadDjangoSecretKeyParameter` policy). It's also the
+output and that role's `ReadSsmParameters` policy). It's also the
 semantically correct choice regardless of the deploy-order issue: a value
 meant to survive every teardown (like the ECR image) needs a key that also
 survives every teardown, not the ephemeral one.
@@ -343,10 +354,10 @@ and are unaffected by root-stack rollback or deletion.
   Control scoped to this exact distribution ARN (`AWS:SourceArn` condition).
 - **All data at rest is KMS-encrypted** with a single rotated CMK (S3, RDS,
   Secrets Manager, ECR, CloudWatch Logs).
-- **CI/CD uses OIDC** (`bootstrap.yaml`'s `GitHubActionsEcrPushRole` for the
-  app repo's build-and-push workflow, its `InfraDeployRole` for this repo's
-  deploy workflow) — no long-lived AWS credentials anywhere, each role
-  scoped to one repo + branch via the `sub` claim.
+- **CI/CD uses OIDC** (`ecr.yaml`'s `GitHubActionsEcrPushRole` for the app
+  repo's build-and-push workflow, `bootstrap.yaml`'s `InfraDeployRole` for
+  this repo's deploy workflow) — no long-lived AWS credentials anywhere,
+  each role scoped to one repo + branch via the `sub` claim.
 - Every resource is tagged `Project` / `Environment` / `ManagedBy` via
   `deployments/root.yaml`'s `tags:` block, which `deploy-root-stack.yml`
   passes to `aws cloudformation deploy --tags` and which nested stacks then

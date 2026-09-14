@@ -10,13 +10,15 @@ Description: >
   `cloudformation deploy` in one job, packaged template never committed).
   Not Git-sync.
 
-  PREREQUISITES: bootstrap.yaml, then ecr.yaml, must already exist -
-  neither is in this tree. Both survive every teardown/respin, so their
-  ARNs (EcrRepositoryArn, GitHubActionsRoleArn) are plain Parameters, not
-  nested-stack references. The GitHub Actions role moved from this tree
-  into bootstrap.yaml to break a real circular dependency: ecr.yaml needs
-  that role to exist first, and EcsAlbStack here needs ecr.yaml's KMS
-  export.
+  PREREQUISITES: bootstrap.yaml, then ecr.yaml, must already exist - neither
+  is in this tree. Both survive every teardown/respin. EcrRepositoryArn is
+  a plain Parameter (not a nested-stack reference); GitHubActionsRoleArn is
+  resolved via Fn::ImportValue against ecr.yaml's export instead, since
+  ecr.yaml now owns that role (it's only ever used by ecr.yaml's own
+  RepositoryPolicyText - see that template's Description). The GitHub
+  Actions role moved out of this tree originally to break a real circular
+  dependency: ecr.yaml needs that role to exist first, and EcsAlbStack here
+  needs ecr.yaml's KMS export.
 
 Parameters:
   ProjectName:
@@ -127,22 +129,11 @@ Parameters:
     Type: Number
     Default: 15
 
-  # ---- ecr (persistent, deployed standalone via templates/ecr.yaml - see
-  #      that template's Description for why it lives outside this tree) ----
-  # EcrRepositoryName isn't a Parameter here - nothing in this nested-stack
-  # tree needs it since 09-cicd-pipeline.yaml stopped triggering off ECR
-  # push events (it now triggers off its own S3 artifact bucket instead).
+  # ---- ecr (persistent, deployed standalone via templates/ecr.yaml) ----
+  # EcrRepositoryName isn't a Parameter here since 09-cicd-pipeline.yaml no longer triggers off ECR push events
   EcrRepositoryArn:
     Type: String
     Description: ECR repository ARN, output by the standalone templates/ecr.yaml stack.
-
-  # ---- github actions role (persistent, created by templates/bootstrap.yaml
-  #      - see that template's Description for why it lives outside this tree) ----
-  GitHubActionsRoleArn:
-    Type: String
-    Description: >
-      GitHub Actions ECR-push role ARN, output by the standalone
-      templates/bootstrap.yaml stack.
 
 Resources:
   NetworkStack:
@@ -282,7 +273,8 @@ Resources:
         Environment: !Ref Environment
         DeploymentTimeoutMinutes: !Ref DeploymentTimeoutMinutes
         AppKmsKeyArn: !GetAtt SecurityStack.Outputs.AppKmsKeyArn
-        GitHubActionsRoleArn: !Ref GitHubActionsRoleArn
+        GitHubActionsRoleArn: !ImportValue
+          Fn::Sub: ${ProjectName}-${Environment}-github-actions-role-arn
         AlbFullName: !GetAtt EcsAlbStack.Outputs.AlbFullName
         BlueTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.BlueTargetGroupFullName
         GreenTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.GreenTargetGroupFullName
@@ -309,12 +301,6 @@ Outputs:
     Description: >
       Same value passed in as a parameter - the repository itself lives in
       the standalone templates/ecr.yaml stack, not here.
-
-  GitHubActionsRoleArn:
-    Value: !Ref GitHubActionsRoleArn
-    Description: >
-      Same value passed in as a parameter - the role itself lives in the
-      standalone templates/bootstrap.yaml stack, not here.
 
   PipelineArtifactBucketName:
     Value: !GetAtt CicdPipelineStack.Outputs.PipelineArtifactBucketName

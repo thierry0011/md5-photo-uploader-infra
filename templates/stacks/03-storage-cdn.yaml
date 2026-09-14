@@ -176,7 +176,7 @@ Resources:
             Resource: !Sub ${ImagesBucket.Arn}/*
             Condition:
               StringEquals:
-                AWS:SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
           - Sid: DenyInsecureTransport
             Effect: Deny
             Principal: "*"
@@ -187,6 +187,15 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: false
+
+  # Stable parameter name the app repo reads, since CloudFront's own domain is randomly assigned per distribution
+  CloudFrontDomainParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub ${ProjectName}-${Environment}-cloudfront-domain
+      Type: String
+      Value: !GetAtt CloudFrontDistribution.DomainName
+      Description: CloudFront distribution domain name, read by the app repo's ECS task at container launch.
 
 Outputs:
   AccessLogsBucketName:
