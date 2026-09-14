@@ -3,22 +3,20 @@ Description: >
   Photo Gallery - root nested-stack template. Owns 8 child stacks (network,
   security, vpc-endpoints, storage-cdn, database, ecs-alb, autoscaling,
   cicd-pipeline), wiring cross-stack values via !GetAtt. Single flat
-  nesting (no grouping stacks) since the dependency graph crosses too many
-  boundaries for grouping to pay off.
+  nesting since the dependency graph crosses too many boundaries for
+  grouping to pay off.
 
   DEPLOYED BY: .github/workflows/deploy-root-stack.yml (packages to S3 +
-  `cloudformation deploy` in one job, packaged template never committed).
+  cloudformation deploy in one job; packaged template never committed).
   Not Git-sync.
 
-  PREREQUISITES: bootstrap.yaml, then ecr.yaml, must already exist - neither
-  is in this tree. Both survive every teardown/respin. EcrRepositoryArn is
-  a plain Parameter (not a nested-stack reference); GitHubActionsRoleArn is
-  resolved via Fn::ImportValue against ecr.yaml's export instead, since
-  ecr.yaml now owns that role (it's only ever used by ecr.yaml's own
-  RepositoryPolicyText - see that template's Description). The GitHub
-  Actions role moved out of this tree originally to break a real circular
-  dependency: ecr.yaml needs that role to exist first, and EcsAlbStack here
-  needs ecr.yaml's KMS export.
+  PREREQUISITES: bootstrap.yaml, then ecr.yaml, must already exist -
+  neither is in this tree, and both survive every teardown/respin.
+  EcrRepositoryArn is a plain Parameter; GitHubActionsRoleArn is resolved
+  via Fn::ImportValue against ecr.yaml's export, since ecr.yaml owns that
+  role. It moved out of this tree to break a real circular dependency:
+  ecr.yaml needs the role first, and EcsAlbStack here needs ecr.yaml's
+  KMS export.
 
 Parameters:
   ProjectName:

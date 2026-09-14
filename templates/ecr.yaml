@@ -1,20 +1,19 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - persistent ECR repository for the Django app image, plus
-  GitHubActionsEcrPushRole (the app repo's CI push role - lives here, not
-  in bootstrap.yaml, because it's only ever used by this template's
-  RepositoryPolicyText; defining both in the same template lets
-  CloudFormation resolve the dependency intra-stack instead of requiring a
-  pasted-literal Parameter between two separately-deployed stacks).
-  Outside root.yaml's nested-stack tree and untouched by teardown.sh: the
-  one piece of state meant to survive a full teardown/respin, so the last
-  working image never needs rebuilding. Deployed once via Git sync using
-  InfraDeployRole (from bootstrap.yaml) - no new IAM needed.
+  GitHubActionsEcrPushRole (app repo's CI push role; kept here so
+  RepositoryPolicyText can resolve it intra-stack, no cross-stack
+  Parameter needed). Outside root.yaml's nested-stack tree and untouched
+  by teardown.sh - the one resource meant to survive a full
+  teardown/respin. Deployed once via Git sync using InfraDeployRole
+  (from bootstrap.yaml).
 
-  Uses its own dedicated CMK (EcrKmsKey), not the shared AppKmsKey from
-  01-security.yaml: that key lives in SecurityStack, which teardown
-  eventually destroys - reusing it would make every retained image
-  unreadable, backwards for a resource meant to survive teardown.
+  ECR encrypts image layers at rest by default (AES256), so the repo
+  itself no longer uses a CMK. EcrKmsKey is kept only because it's a
+  persistent key that 07-ecs-alb.yaml's TaskExecutionRole reuses to
+  decrypt the Django secret SSM param (see EcrKmsKeyArn output) - using
+  the shared AppKmsKey from 01-security.yaml instead isn't an option
+  since SecurityStack is ephemeral and gets destroyed on teardown.
   EcrKmsKey is Retain'd and skipped by teardown.sh and the KMS
   orphan-cleanup scan.
 
@@ -43,13 +42,13 @@ Parameters:
     Description: Branch allowed to assume the push role.
 
 Resources:
-  # Dedicated CMK (never shared with the ephemeral tree)
+  # Persistent CMK, kept for 07-ecs-alb.yaml's SSM secret decryption only (never shared with the ephemeral tree)
   EcrKmsKey:
     Type: AWS::KMS::Key
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Description: !Sub Dedicated CMK for ${ProjectName}-${Environment} ECR (persists across respins, never shared with root.yaml's SecurityStack key)
+      Description: !Sub Persistent CMK for ${ProjectName}-${Environment} (SSM secret decryption; persists across respins, never shared with root.yaml's SecurityStack key)
       EnableKeyRotation: true
       KeyPolicy:
         Version: "2012-10-17"
@@ -128,8 +127,7 @@ Resources:
         ScanOnPush: true
       ImageTagMutability: MUTABLE
       EncryptionConfiguration:
-        EncryptionType: KMS
-        KmsKey: !GetAtt EcrKmsKey.Arn
+        EncryptionType: AES256
       LifecyclePolicy:
         LifecyclePolicyText: |
           {
