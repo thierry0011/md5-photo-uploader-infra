@@ -135,8 +135,7 @@ Resources:
               AWS: !Ref GitHubActionsRoleArn
             Action: s3:PutObject
             Resource: !Sub ${PipelineArtifactBucket.Arn}/source/*
-
-  # The uploader needs its own KMS grant too (a bucket policy can't grant it); IAM::Policy needs a role name, hence Split/Select
+ 
   GitHubActionsArtifactUploadKmsPolicy:
     Type: AWS::IAM::Policy
     Properties:

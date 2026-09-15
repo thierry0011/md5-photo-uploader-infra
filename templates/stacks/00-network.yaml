@@ -1,9 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Photo Gallery - Multi-AZ network foundation: VPC, public subnets (ALB),
-  private subnets (ECS/RDS), routing, and the S3 gateway endpoint. No NAT -
-  ECS reaches ECR/CloudWatch Logs/Secrets Manager via VPC interface endpoints
-  and S3 via this stack's gateway endpoint.
+  private subnets (ECS), dedicated private subnets (RDS), routing, and the
+  S3 gateway endpoint. No NAT - ECS reaches ECR/CloudWatch Logs/Secrets
+  Manager via VPC interface endpoints and S3 via this stack's gateway
+  endpoint.
 
 Parameters:
   ProjectName:
@@ -35,6 +36,16 @@ Parameters:
   PrivateSubnet2Cidr:
     Type: String
     Default: 10.20.11.0/24
+
+  PrivateDbSubnet1Cidr:
+    Type: String
+    Default: 10.20.20.0/24
+    Description: Dedicated private subnet for RDS, AZ0. Separate tier from the ECS private subnets.
+
+  PrivateDbSubnet2Cidr:
+    Type: String
+    Default: 10.20.21.0/24
+    Description: Dedicated private subnet for RDS, AZ1. Separate tier from the ECS private subnets.
 
 Resources:
   VPC:
@@ -174,6 +185,61 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable2
 
+  # ---------------- Private subnets (RDS only) ----------------
+  PrivateDbSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateDbSubnet1Cidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-private-db-1
+        - Key: Tier
+          Value: private-db
+
+  PrivateDbSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateDbSubnet2Cidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-private-db-2
+        - Key: Tier
+          Value: private-db
+
+  PrivateDbRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-private-db-rt-1
+
+  PrivateDbRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Environment}-private-db-rt-2
+
+  PrivateDbSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDbSubnet1
+      RouteTableId: !Ref PrivateDbRouteTable1
+
+  PrivateDbSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDbSubnet2
+      RouteTableId: !Ref PrivateDbRouteTable2
+
   # ---------------- S3 Gateway endpoint (free, attaches to route tables) ----------------
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -185,6 +251,8 @@ Resources:
         - !Ref PublicRouteTable
         - !Ref PrivateRouteTable1
         - !Ref PrivateRouteTable2
+        - !Ref PrivateDbRouteTable1
+        - !Ref PrivateDbRouteTable2
 
 Outputs:
   VpcId:
@@ -204,3 +272,9 @@ Outputs:
 
   PrivateSubnet2Id:
     Value: !Ref PrivateSubnet2
+
+  PrivateDbSubnet1Id:
+    Value: !Ref PrivateDbSubnet1
+
+  PrivateDbSubnet2Id:
+    Value: !Ref PrivateDbSubnet2

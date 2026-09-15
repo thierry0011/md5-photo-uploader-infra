@@ -42,7 +42,7 @@ Internet ──HTTP───▶ ALB (public subnets, 2 AZ)
                                       between blue/green directly)
                        │
                        ▼
-              RDS PostgreSQL (private subnets, db.t3)
+              RDS PostgreSQL (dedicated private subnets, 2 AZ, db.t3)
 
 No NAT Gateway by default — ECS tasks reach ECR, S3, CloudWatch Logs and
 Secrets Manager entirely through VPC interface/gateway endpoints.
@@ -95,7 +95,7 @@ job finishes. There is no generated file to accidentally hand-edit.
 |---|---|---|---|
 | — | `bootstrap.yaml` (standalone, **not nested**) | S3 bucket for packaged templates, `InfraDeployRole` (dual-trust: GitHub OIDC for this repo's deploy workflow + `cloudformation.amazonaws.com` as root's execution role) | — |
 | — | `ecr.yaml` (standalone, **not nested**, survives teardown) | ECR repository for the app image, its own dedicated KMS CMK, `GitHubActionsEcrPushRole` (OIDC role the **app repo's** CI assumes to push images to ECR and upload deploy artifacts) and the repo policy trusting it | — (role is defined in this same template, no cross-stack reference needed) |
-| `NetworkStack` | `stacks/00-network.yaml` | VPC, public/private subnets (2 AZ), routing, S3 gateway endpoint | — |
+| `NetworkStack` | `stacks/00-network.yaml` | VPC, public/private subnets (2 AZ) plus a dedicated RDS-only private tier (2 AZ), routing, S3 gateway endpoint | — |
 | `SecurityStack` | `stacks/01-security.yaml` | Security groups, shared KMS CMK | Network |
 | `VpcEndpointsStack` | `stacks/02-vpc-endpoints.yaml` | Interface endpoints: ECR api/dkr, CloudWatch Logs, Secrets Manager | Network, Security |
 | `StorageCdnStack` | `stacks/03-storage-cdn.yaml` | S3 image bucket, CloudFront + OAC, access-logs bucket | Security |
@@ -350,6 +350,13 @@ and are unaffected by root-stack rollback or deletion.
   tier (ALB, ECS, NAT) is genuinely spread across both - inconsistent with
   the "highly available" requirement. Flip to `"false"` only if minimizing
   cost matters more than that for a given run.
+- **RDS sits in its own dedicated private subnet tier** (`PrivateDbSubnet1/2`,
+  `10.20.20.0/24` / `10.20.21.0/24`), separate from the ECS private subnets
+  (`PrivateSubnet1/2`, `10.20.10.0/24` / `10.20.11.0/24`). Blast-radius
+  isolation only — the RDS security group already restricts inbound to the
+  ECS security group regardless of subnet, so this doesn't change reachability,
+  just keeps the DB off the same subnet as anything else that ever lands in
+  the app tier.
 - **S3 bucket is fully private**; CloudFront reads it only via Origin Access
   Control scoped to this exact distribution ARN (`AWS:SourceArn` condition).
 - **All data at rest is KMS-encrypted** with a single rotated CMK (S3, RDS,

@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Photo Gallery - RDS PostgreSQL (db.t3 family) in private subnets, credentials
-  in Secrets Manager, encrypted with the shared CMK.
+  Photo Gallery - RDS PostgreSQL (db.t3 family) in its own dedicated private
+  subnets (separate tier from ECS), credentials in Secrets Manager, encrypted
+  with the shared CMK.
 
 Parameters:
   ProjectName:
@@ -32,9 +33,9 @@ Parameters:
 
   DBMultiAZ:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues: ["true", "false"]
-    Description: Multi-AZ RDS failover roughly doubles cost; off by default for this lab.
+    Description: Multi-AZ RDS failover roughly doubles cost; on by default.
 
   DBDeletionProtection:
     Type: String
@@ -45,13 +46,13 @@ Parameters:
     Type: Number
     Default: 7
 
-  PrivateSubnet1Id:
+  PrivateDbSubnet1Id:
     Type: String
-    Description: Private subnet 1 id from the network stack.
+    Description: Dedicated RDS private subnet 1 id from the network stack.
 
-  PrivateSubnet2Id:
+  PrivateDbSubnet2Id:
     Type: String
-    Description: Private subnet 2 id from the network stack.
+    Description: Dedicated RDS private subnet 2 id from the network stack.
 
   AppKmsKeyId:
     Type: String
@@ -72,10 +73,10 @@ Resources:
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: !Sub Private subnets for ${ProjectName}-${Environment} RDS
+      DBSubnetGroupDescription: !Sub Dedicated private subnets for ${ProjectName}-${Environment} RDS
       SubnetIds:
-        - !Ref PrivateSubnet1Id
-        - !Ref PrivateSubnet2Id
+        - !Ref PrivateDbSubnet1Id
+        - !Ref PrivateDbSubnet2Id
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-db-subnet-group

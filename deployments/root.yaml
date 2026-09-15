@@ -7,6 +7,8 @@ parameters:
   PublicSubnet2Cidr: "10.20.1.0/24"
   PrivateSubnet1Cidr: "10.20.10.0/24"
   PrivateSubnet2Cidr: "10.20.11.0/24"
+  PrivateDbSubnet1Cidr: "10.20.20.0/24"
+  PrivateDbSubnet2Cidr: "10.20.21.0/24"
   ContainerPort: "8000"
   DBInstanceClass: db.t3.micro
   DBAllocatedStorage: "20"

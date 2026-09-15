@@ -49,6 +49,14 @@ Parameters:
     Type: String
     Default: 10.20.11.0/24
 
+  PrivateDbSubnet1Cidr:
+    Type: String
+    Default: 10.20.20.0/24
+
+  PrivateDbSubnet2Cidr:
+    Type: String
+    Default: 10.20.21.0/24
+
   # ---- security / ecs-alb shared ----
   ContainerPort:
     Type: Number
@@ -74,7 +82,7 @@ Parameters:
 
   DBMultiAZ:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues: ["true", "false"]
 
   DBDeletionProtection:
@@ -145,6 +153,8 @@ Resources:
         PublicSubnet2Cidr: !Ref PublicSubnet2Cidr
         PrivateSubnet1Cidr: !Ref PrivateSubnet1Cidr
         PrivateSubnet2Cidr: !Ref PrivateSubnet2Cidr
+        PrivateDbSubnet1Cidr: !Ref PrivateDbSubnet1Cidr
+        PrivateDbSubnet2Cidr: !Ref PrivateDbSubnet2Cidr
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-${Environment}-network
@@ -204,8 +214,8 @@ Resources:
         DBMultiAZ: !Ref DBMultiAZ
         DBDeletionProtection: !Ref DBDeletionProtection
         DBBackupRetentionDays: !Ref DBBackupRetentionDays
-        PrivateSubnet1Id: !GetAtt NetworkStack.Outputs.PrivateSubnet1Id
-        PrivateSubnet2Id: !GetAtt NetworkStack.Outputs.PrivateSubnet2Id
+        PrivateDbSubnet1Id: !GetAtt NetworkStack.Outputs.PrivateDbSubnet1Id
+        PrivateDbSubnet2Id: !GetAtt NetworkStack.Outputs.PrivateDbSubnet2Id
         AppKmsKeyId: !GetAtt SecurityStack.Outputs.AppKmsKeyId
         AppKmsKeyArn: !GetAtt SecurityStack.Outputs.AppKmsKeyArn
         RdsSecurityGroupId: !GetAtt SecurityStack.Outputs.RdsSecurityGroupId
