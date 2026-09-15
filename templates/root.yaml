@@ -128,7 +128,6 @@ Parameters:
     Default: 15
 
   # ---- ecr (persistent, deployed standalone via templates/ecr.yaml) ----
-  # EcrRepositoryName isn't a Parameter here since 09-cicd-pipeline.yaml no longer triggers off ECR push events
   EcrRepositoryArn:
     Type: String
     Description: ECR repository ARN, output by the standalone templates/ecr.yaml stack.
@@ -273,6 +272,9 @@ Resources:
         AppKmsKeyArn: !GetAtt SecurityStack.Outputs.AppKmsKeyArn
         GitHubActionsRoleArn: !ImportValue
           Fn::Sub: ${ProjectName}-${Environment}-github-actions-role-arn
+        EcrRepositoryName: !ImportValue
+          Fn::Sub: ${ProjectName}-${Environment}-ecr-repository-name
+        EcrRepositoryArn: !Ref EcrRepositoryArn
         AlbFullName: !GetAtt EcsAlbStack.Outputs.AlbFullName
         BlueTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.BlueTargetGroupFullName
         GreenTargetGroupFullName: !GetAtt EcsAlbStack.Outputs.GreenTargetGroupFullName
