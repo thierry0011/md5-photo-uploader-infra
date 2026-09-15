@@ -109,8 +109,6 @@ Resources:
                   - ecr:CompleteLayerUpload
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
-                  # Resolves the digest ':latest' points to so taskdef.json can pin a fixed image
-                  - ecr:DescribeImages
                 Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-${Environment}-app
       Tags:
         - Key: Name
@@ -176,6 +174,9 @@ Outputs:
 
   RepositoryName:
     Value: !Ref AppRepository
+    # Exported for 09-cicd-pipeline.yaml's ECR source action + EventBridge rule (triggers CodePipeline on push)
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-ecr-repository-name
 
   RepositoryArn:
     Value: !GetAtt AppRepository.Arn
