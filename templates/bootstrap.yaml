@@ -285,6 +285,7 @@ Resources:
                 Action:
                   - rds:CreateDBSubnetGroup
                   - rds:DeleteDBSubnetGroup
+                  - rds:ModifyDBSubnetGroup
                   - rds:DescribeDBSubnetGroups
                   - rds:CreateDBInstance
                   - rds:DeleteDBInstance
